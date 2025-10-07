@@ -1,15 +1,14 @@
 import React, { useEffect, useMemo, useState } from "react";
 
 /** =======================
- *  Config Environnements
+ *  Config affichage + proxy
  *  ======================= */
-// const URLS = {
-//   production: "https://api.zelty.fr/2.10",
-//   staging: "https://api.staging.zelty.co/2.10",
-//   // Active ces proxys si tu as configuré vite.config.js (proxy CORS)
-//   localProd: "/api",
-//   localStaging: "/api-staging",
-// };
+// URLs affichées (info) selon l’environnement choisi
+const DISPLAY_BASES = {
+  production: "https://api.zelty.fr/2.10",
+  staging: "https://api.staging.zelty.co/2.10",
+};
+// Base d’appel côté front : on passe toujours par le proxy Vercel
 const API_BASE = "/api/zelty";
 
 const MODE_OPTIONS = [
@@ -24,9 +23,9 @@ const AGG_SOURCES = [
 const LIMITED_SOURCES = ["web", "mobile", "kiosk"]; // hors mode Agrégateur
 
 /** =======================
- *  Util – fetch API
+ *  Util – fetch API (via proxy)
  *  ======================= */
-async function zfetch(apiBase, path, { apiKey, method = "GET", body, params, baseKey } = {}) {
+async function zfetch(apiBase, path, { apiKey, method = "GET", body, params, baseKey = "production" } = {}) {
   const base = (apiBase || "").replace(/\/$/, "");
   const full = (path.startsWith("/") ? base + path : base + "/" + path);
   const url = new URL(full, window.location.origin);
@@ -43,11 +42,12 @@ async function zfetch(apiBase, path, { apiKey, method = "GET", body, params, bas
     method,
     headers: {
       "Content-Type": "application/json",
-      "Authorization": `Bearer ${apiKey || ""}`,
-      "X-Zelty-Base": baseKey || "production",  // 👈 ajoute ce header
+      "Authorization": `Bearer ${apiKey || ""}`, // clé saisie par l’utilisateur
+      "X-Zelty-Base": baseKey,                   // "production" | "staging"
     },
     body: body ? JSON.stringify(body) : undefined,
   });
+
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
     throw new Error(`${res.status} ${res.statusText}: ${txt}`);
@@ -58,15 +58,14 @@ async function zfetch(apiBase, path, { apiKey, method = "GET", body, params, bas
 /** =======================
  *  App
  *  ======================= */
-export default function ZeltyOrderApp() {
-  // Environnement
-  const [envName, setEnvName] = useState("production");
-  const API_BASE = URLS[envName];
+function App() {
+  // Environnement (affichage + header envoyé au proxy)
+  const [envName, setEnvName] = useState("production"); // "production" | "staging"
 
   // Auth & status
   const [apiKey, setApiKey] = useState("");
   const [status, setStatus] = useState("");
-  const canCall = Boolean(apiKey) && apiKey.length > 8 && Boolean(API_BASE);
+  const canCall = Boolean(apiKey) && apiKey.length > 8;
 
   // Catalogues
   const [restaurants, setRestaurants] = useState([]);
@@ -111,7 +110,7 @@ export default function ZeltyOrderApp() {
       try {
         setStatus("Chargement des catalogues…");
         try {
-          const r = await zfetch(API_BASE, "/restaurants", { apiKey,baseKey: envName, });
+          const r = await zfetch(API_BASE, "/restaurants", { apiKey, baseKey: envName });
           const rs = r?.restaurants || [];
           setRestaurants(rs);
           if (rs.length === 1) setRestaurantId(String(rs[0].id));
@@ -119,16 +118,16 @@ export default function ZeltyOrderApp() {
           console.warn("restaurants", e);
         }
 
-        const d = await zfetch(API_BASE, "/catalog/dishes", { apiKey, params: { lang: "fr", limit: 2000 },baseKey: envName, });
+        const d = await zfetch(API_BASE, "/catalog/dishes", { apiKey, baseKey: envName, params: { lang: "fr", limit: 2000 } });
         setDishes(d?.dishes || []);
 
-        const m = await zfetch(API_BASE, "/catalog/menus", { apiKey, params: { lang: "fr", limit: 1000 },baseKey: envName, });
+        const m = await zfetch(API_BASE, "/catalog/menus", { apiKey, baseKey: envName, params: { lang: "fr", limit: 1000 } });
         setMenus(m?.menus || []);
 
-        const o = await zfetch(API_BASE, "/catalog/options", { apiKey, params: { lang: "fr", limit: 2000 },baseKey: envName, });
+        const o = await zfetch(API_BASE, "/catalog/options", { apiKey, baseKey: envName, params: { lang: "fr", limit: 2000 } });
         setOptionsList(o?.options || []);
 
-        const t = await zfetch(API_BASE, "/transaction-methods", { apiKey,baseKey: envName, });
+        const t = await zfetch(API_BASE, "/transaction-methods", { apiKey, baseKey: envName });
         setTxnMethods(t?.transaction_methods || []);
 
         setStatus("Catalogues chargés.");
@@ -136,7 +135,7 @@ export default function ZeltyOrderApp() {
         setStatus(`Erreur de chargement : ${err.message}`);
       }
     })();
-  }, [API_BASE, apiKey, canCall]);
+  }, [apiKey, canCall, envName]);
 
   /** ===== Helpers ===== */
   const findDish = (id) => dishes.find(d => Number(d.id) === Number(id));
@@ -176,7 +175,6 @@ export default function ZeltyOrderApp() {
           quantity: Math.max(1, Number(line.quantity || 1)),
         };
 
-        // MODIFIERS depuis les sélections guidées
         const modifiers = [];
         for (const [optId, valueIdsRaw] of Object.entries(line.optionSelections || {})) {
           const opt = findOption(optId);
@@ -187,7 +185,7 @@ export default function ZeltyOrderApp() {
               option_id: Number(optId),
               option_value_id: Number(vId),
               quantity: 1,
-              price: val?.price ?? 0, // centimes TTC
+              price: val?.price ?? 0,
             });
           });
         }
@@ -201,13 +199,12 @@ export default function ZeltyOrderApp() {
           type: "menu",
           id: Number(line.menuId),
           quantity: Math.max(1, Number(line.quantity || 1)),
-          dishes: [], // structure attendue par Zelty
+          dishes: [],
         };
 
         for (const [partId, choice] of Object.entries(line.menuChoices || {})) {
           if (!choice || !choice.dishId) continue;
 
-          // Modifiers par plat de la part
           const partModifiers = [];
           for (const [optId, valIdsRaw] of Object.entries(choice.optionSelections || {})) {
             const opt = findOption(optId);
@@ -258,7 +255,7 @@ export default function ZeltyOrderApp() {
       setLoading(true);
       setStatus("Création de la commande…");
 
-      const created = await zfetch(API_BASE, "/orders", { apiKey, method: "POST", body: payload, baseKey: envName, });
+      const created = await zfetch(API_BASE, "/orders", { apiKey, method: "POST", body: payload, baseKey: envName });
       const order = created?.order || created;
       if (!order?.id) throw new Error("Réponse inattendue : pas d'ID de commande.");
 
@@ -270,8 +267,8 @@ export default function ZeltyOrderApp() {
         await zfetch(API_BASE, `/orders/${order.id}/transactions`, {
           apiKey,
           method: "POST",
-          body: { transactions: [{ name: methodName, price: total }], close_if_paid: true },
           baseKey: envName,
+          body: { transactions: [{ name: methodName, price: total }], close_if_paid: true },
         });
       }
 
@@ -287,7 +284,7 @@ export default function ZeltyOrderApp() {
   /** ====== UI ====== */
   return (
     <div style={{ maxWidth: 1100, margin: "24px auto", padding: "0 16px", fontFamily: "system-ui, -apple-system, Segoe UI, Roboto" }}>
-      <h1>Zelty – Création de commande (React JS)</h1>
+      <h1>Zelty – Création de commande</h1>
       <p style={{ color: "#666", fontSize: 14 }}>{status || "Choisis l’environnement, puis renseigne la clé API pour charger les catalogues."}</p>
 
       {/* Connexion / Environnement */}
@@ -299,10 +296,8 @@ export default function ZeltyOrderApp() {
             <select value={envName} onChange={(e) => setEnvName(e.target.value)}>
               <option value="production">Production</option>
               <option value="staging">Staging</option>
-              <option value="localProd">Local (proxy) – Prod</option>
-              <option value="localStaging">Local (proxy) – Staging</option>
             </select>
-            <div style={muted}>URL active : <code>{API_BASE}</code></div>
+            <div style={muted}>URL cible : <code>{DISPLAY_BASES[envName]}</code></div>
           </div>
 
           <div style={col}>
@@ -570,7 +565,6 @@ export default function ZeltyOrderApp() {
 
                           const chosenDish = choice.dishId ? findDish(choice.dishId) : null;
 
-                          // Compter sélection d'options pour la part
                           const totalSelectedForPart = Object.values(choice.optionSelections || {})
                             .reduce((acc, v) => acc + (Array.isArray(v) ? v.length : 0), 0);
 
@@ -749,3 +743,5 @@ const pill = { display: "inline-block", padding: "4px 8px", border: "1px solid #
 const summaryStyle = { cursor: "pointer", userSelect: "none", fontWeight: 600 };
 const groupSummaryStyle = { cursor: "pointer", userSelect: "none" };
 const chip = { display: "inline-flex", alignItems: "center", gap: 6, border: "1px solid #ddd", borderRadius: 999, padding: "4px 8px" };
+
+export default App;
