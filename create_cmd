@@ -1,0 +1,454 @@
+import React, { useEffect, useMemo, useState } from "react";
+
+// ====== Configuration ======
+const API_BASE = "https://api.zelty.fr/2.10"; // ajuste si nécessaire
+
+// ====== Utils ======
+async function zfetch(path, { apiKey, method = "GET", body, params } = {}) {
+  const url = new URL(API_BASE + path);
+  if (params) {
+    Object.entries(params).forEach(([k, v]) => {
+      if (v == null || v === "") return;
+      if (Array.isArray(v)) v.forEach((vv) => url.searchParams.append(k, vv));
+      else url.searchParams.set(k, String(v));
+    });
+  }
+  const res = await fetch(url.toString(), {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey || ""}`,
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`${res.status} ${res.statusText}: ${txt}`);
+  }
+  return res.json();
+}
+
+const AGG_SOURCES = [
+  "pos","remote","web","mobile","kiosk","bo","justeat","foodora","ubereats","glovo","deliveroo","order-it",
+];
+
+const MODE_OPTIONS = [
+  { value: "eat_in", label: "Sur place" },
+  { value: "takeaway", label: "À emporter" },
+  { value: "delivery", label: "Livraison" },
+];
+
+export default function ZeltyOrderApp() {
+  // ====== State ======
+  const [apiKey, setApiKey] = useState("");
+  const [restaurants, setRestaurants] = useState([]);
+  const [restaurantId, setRestaurantId] = useState("");
+
+  const [dishes, setDishes] = useState([]);
+  const [menus, setMenus] = useState([]);
+  const [optionsList, setOptionsList] = useState([]);
+  const [txnMethods, setTxnMethods] = useState([]);
+
+  const [mode, setMode] = useState("eat_in");
+  const [isAggregator, setIsAggregator] = useState(false);
+  const [source, setSource] = useState("");
+  const [dueDate, setDueDate] = useState(""); // datetime-local
+  const [addCustomer, setAddCustomer] = useState(false);
+  const [customerId, setCustomerId] = useState("");
+
+  const [dishId, setDishId] = useState("");
+  const [dishQty, setDishQty] = useState(1);
+  const [dishOptionValues, setDishOptionValues] = useState(""); // comma separated ids
+
+  const [menuId, setMenuId] = useState("");
+  const [menuQty, setMenuQty] = useState(1);
+  const [menuChoices, setMenuChoices] = useState({}); // { partId: dishId }
+
+  const [cart, setCart] = useState([]); // items: {type:"dish"|"menu", id, quantity, options?:[ids], menu_choices?}
+
+  const [paid, setPaid] = useState(false);
+  const [paymentMethodId, setPaymentMethodId] = useState("");
+
+  const [status, setStatus] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const canCall = apiKey && apiKey.length > 8;
+
+  // ====== Bootstrap catalogs ======
+  useEffect(() => {
+    if (!canCall) return;
+    (async () => {
+      try {
+        setStatus("Chargement…");
+        // Restaurants (optionnel)
+        try {
+          const r = await zfetch("/restaurants", { apiKey });
+          const rs = r?.restaurants || [];
+          setRestaurants(rs);
+          if (rs.length === 1) setRestaurantId(String(rs[0].id));
+        } catch (e) {
+          // non bloquant
+          console.warn("restaurants", e);
+        }
+        // Dishes
+        const d = await zfetch("/catalog/dishes", { apiKey, params: { lang: "fr", limit: 1000 } });
+        setDishes(d?.dishes || []);
+        // Menus
+        const m = await zfetch("/catalog/menus", { apiKey, params: { lang: "fr" } });
+        setMenus(m?.menus || []);
+        // Options
+        const o = await zfetch("/catalog/options", { apiKey, params: { lang: "fr" } });
+        setOptionsList(o?.options || []);
+        // Payment methods
+        const t = await zfetch("/transaction-methods", { apiKey });
+        setTxnMethods(t?.transaction_methods || []);
+        setStatus("Catalogues chargés.");
+      } catch (err) {
+        setStatus(`Erreur de chargement: ${err.message}`);
+      }
+    })();
+  }, [apiKey, canCall]);
+
+  // ====== Build payload (live) ======
+  const payload = useMemo(() => {
+    const allowed = new Set(["web", "mobile", "kiosk"]);
+    const sourceValue = isAggregator
+      ? (source || undefined)                  // Agrégateur ON → toutes les sources listées sont valides
+      : (allowed.has(source) ? source : undefined); // Agrégateur OFF → limité à web|mobile|kiosk
+
+    const items = cart.map((it) => {
+      if (it.type === "dish") {
+        const entry = { id: it.id, type: "dish", quantity: it.quantity };
+        if (it.options && it.options.length) entry.options = it.options;
+        return entry;
+      } else {
+        const entry = { id: it.id, type: "menu", quantity: it.quantity };
+        if (it.menu_choices && Object.keys(it.menu_choices).length) entry.menu_choices = it.menu_choices;
+        return entry;
+      }
+    });
+
+    const p = {
+      id_restaurant: restaurantId ? Number(restaurantId) : undefined,
+      mode,
+      due_date: dueDate ? new Date(dueDate).toISOString() : undefined,
+      source: sourceValue,
+      items,
+    };
+    if (addCustomer && customerId) p.customer = { id: Number(customerId) };
+    return p;
+  }, [restaurantId, mode, dueDate, isAggregator, source, cart, addCustomer, customerId]);
+
+  // ====== Handlers ======
+  function addDishToCart() {
+    const id = Number(dishId || 0);
+    if (!id) return;
+    const quantity = Math.max(1, Number(dishQty || 1));
+    const opts = (dishOptionValues || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map(Number);
+    setCart((c) => [...c, { type: "dish", id, quantity, options: opts }]);
+    setDishQty(1);
+    setDishOptionValues("");
+  }
+
+  function prepMenuParts() {
+    // Just a visual helper; actual UI is below where we render dynamic selectors.
+    // This function exists only to make the UX explicit, no-op here.
+  }
+
+  function addMenuToCart() {
+    const id = Number(menuId || 0);
+    if (!id) return;
+    const quantity = Math.max(1, Number(menuQty || 1));
+    const choices = {};
+    const menu = menus.find((m) => m.id === id);
+    if (menu && Array.isArray(menu.parts)) {
+      menu.parts.forEach((part) => {
+        const key = `part_${part.id}`;
+        const v = document.getElementById(key)?.value;
+        if (v) choices[part.id] = Number(v);
+      });
+    }
+    setCart((c) => [...c, { type: "menu", id, quantity, menu_choices: choices }]);
+    setMenuQty(1);
+    setMenuChoices({});
+  }
+
+  function removeCartIndex(i) {
+    setCart((c) => c.filter((_, idx) => idx !== i));
+  }
+
+  async function createOrder() {
+    try {
+      if (!canCall) throw new Error("Renseigne la clé API.");
+      if (!cart.length) throw new Error("Panier vide.");
+      setLoading(true);
+      setStatus("Création de la commande…");
+      const created = await zfetch("/orders", { apiKey, method: "POST", body: payload });
+      const order = created?.order || created;
+      if (!order?.id) throw new Error("Réponse inattendue : pas d'ID de commande.");
+
+      if (paid) {
+        if (!paymentMethodId) throw new Error("Sélectionne une méthode de paiement.");
+        const total = Number(order?.price?.final_amount_inc_tax || 0);
+        const method = txnMethods.find((m) => String(m.id) === String(paymentMethodId));
+        const methodName = method?.name || "CB";
+        await zfetch(`/orders/${order.id}/transactions`, {
+          apiKey,
+          method: "POST",
+          body: { transactions: [{ name: methodName, price: total }], close_if_paid: true },
+        });
+      }
+
+      setStatus(`✅ Commande #${order.id} créée${paid ? " et payée" : ""}.`);
+      setCart([]);
+    } catch (err) {
+      setStatus(`❌ ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // ====== Render helpers ======
+  function MenuPartsPicker() {
+    const menu = menus.find((m) => String(m.id) === String(menuId));
+    if (!menu || !Array.isArray(menu.parts)) return null;
+    return (
+      <div className="grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
+        {menu.parts.map((part) => (
+          <div key={part.id}>
+            <label>
+              {part.name || `Part #${part.id}`}
+            </label>
+            <select id={`part_${part.id}`} defaultValue="">
+              <option value="">—</option>
+              {part.dishes.map((did) => {
+                const d = dishes.find((x) => x.id === did);
+                return (
+                  <option key={did} value={did}>
+                    {d ? d.name : `Dish #${did}`} (#{did})
+                  </option>
+                );
+              })}
+            </select>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // ====== UI ======
+  return (
+    <div style={{ maxWidth: 1100, margin: "24px auto", padding: "0 16px", fontFamily: "system-ui, -apple-system, Segoe UI, Roboto" }}>
+      <h1>Zelty – Création de commande (React JS)</h1>
+      <p style={{ color: "#666", fontSize: 14 }}>{status || "Renseigne la clé API pour charger les catalogues."}</p>
+
+      <fieldset style={fs}>
+        <legend>1) Contexte & authentification</legend>
+        <div style={row}>
+          <div style={col}>
+            <label>Clé API (Bearer)</label>
+            <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value.trim())} placeholder="zk_live_***" />
+          </div>
+          <div style={col}>
+            <label>Restaurant (optionnel)</label>
+            <select value={restaurantId} onChange={(e) => setRestaurantId(e.target.value)}>
+              <option value="">—</option>
+              {restaurants.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.name} (#{r.id})
+                </option>
+              ))}
+            </select>
+            <div style={muted}>Auto-rempli si ta clé est mono-site.</div>
+          </div>
+          <div style={col}>
+            <label>Mode de consommation</label>
+            <select value={mode} onChange={(e) => setMode(e.target.value)}>
+              {MODE_OPTIONS.map((m) => (
+                <option key={m.value} value={m.value}>{m.label}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div style={row}>
+          <div style={col}>
+            <label><input type="checkbox" checked={isAggregator} onChange={(e) => setIsAggregator(e.target.checked)} /> Agrégateur ?</label>
+          </div>
+          {isAggregator && (
+            <div style={col}>
+              <label>Source</label>
+              <select value={source} onChange={(e) => setSource(e.target.value)}>
+                <option value="">—</option>
+                {AGG_SOURCES.map((s) => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+              <div style={muted}>{isAggregator ? 'En mode Agrégateur, toutes les sources de la liste sont autorisées.' : 'Hors mode Agrégateur, source limitée à web|mobile|kiosk.'}</div>
+            </div>
+          )}
+          <div style={col}>
+            <label>Date/heure (due_date)</label>
+            <input type="datetime-local" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+          </div>
+        </div>
+
+        <div style={row}>
+          <div style={col}>
+            <label><input type="checkbox" checked={addCustomer} onChange={(e) => setAddCustomer(e.target.checked)} /> Ajouter un client ?</label>
+          </div>
+          {addCustomer && (
+            <div style={col}>
+              <label>ID client Zelty</label>
+              <input type="number" min="0" value={customerId} onChange={(e) => setCustomerId(e.target.value)} placeholder="123456" />
+            </div>
+          )}
+        </div>
+      </fieldset>
+
+      <fieldset style={fs}>
+        <legend>2) Panier – Produits & Menus</legend>
+
+        <div style={row}>
+          <div style={col}>
+            <label>Produit</label>
+            <select value={dishId} onChange={(e) => setDishId(e.target.value)}>
+              <option value="">—</option>
+              {dishes.map((d) => (
+                <option key={d.id} value={d.id}>{d.name} (#{d.id})</option>
+              ))}
+            </select>
+          </div>
+          <div style={col}>
+            <label>Quantité</label>
+            <input type="number" min="1" value={dishQty} onChange={(e) => setDishQty(Number(e.target.value || 1))} />
+          </div>
+          <div style={col}>
+            <label>Options (IDs séparés par virgule)</label>
+            <input value={dishOptionValues} onChange={(e) => setDishOptionValues(e.target.value)} placeholder="5517,5521…" />
+            <div style={muted}>Les valeurs d’options sont listées plus bas (onglet Options).</div>
+          </div>
+          <div style={{...col, alignItems: "end", display: "flex"}}>
+            <button onClick={addDishToCart}>+ Ajouter produit</button>
+          </div>
+        </div>
+
+        <details>
+          <summary>Ajouter un menu</summary>
+          <div style={{ height: 8 }} />
+          <div style={row}>
+            <div style={col}>
+              <label>Menu</label>
+              <select value={menuId} onChange={(e) => setMenuId(e.target.value)}>
+                <option value="">—</option>
+                {menus.map((m) => (
+                  <option key={m.id} value={m.id}>{m.name} (#{m.id})</option>
+                ))}
+              </select>
+            </div>
+            <div style={col}>
+              <label>Quantité</label>
+              <input type="number" min="1" value={menuQty} onChange={(e) => setMenuQty(Number(e.target.value || 1))} />
+            </div>
+          </div>
+          <MenuPartsPicker />
+          <div style={{ marginTop: 10 }}>
+            <button onClick={prepMenuParts} style={{ marginRight: 8 }}>Préparer les parties</button>
+            <button onClick={addMenuToCart}>+ Ajouter menu</button>
+          </div>
+        </details>
+
+        <hr />
+        <div style={row}>
+          <div style={{ ...col, flex: 2 }}>
+            <b>Panier</b>
+            <div style={{ border: "1px dashed #bbb", padding: 10, borderRadius: 8, marginTop: 8 }}>
+              {cart.length === 0 && <div style={muted}>— Vide —</div>}
+              {cart.map((it, idx) => (
+                <div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, margin: "6px 0" }}>
+                  <div style={{ flex: 1 }}>
+                    {it.type === "dish" ? (
+                      <span>Produit #{it.id} × {it.quantity}{it.options?.length ? ` (options: ${it.options.join(",")})` : ""}</span>
+                    ) : (
+                      <span>Menu #{it.id} × {it.quantity}{it.menu_choices && Object.keys(it.menu_choices).length ? ` (choix: ${Object.entries(it.menu_choices).map(([p,d]) => `part ${p}→${d}`).join(", ")})` : ""}</span>
+                    )}
+                  </div>
+                  <button onClick={() => removeCartIndex(idx)}>Supprimer</button>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div style={col}>
+            <label><input type="checkbox" checked={paid} onChange={(e) => setPaid(e.target.checked)} /> Commande payée ?</label>
+            {paid && (
+              <div style={{ marginTop: 6 }}>
+                <label>Méthode de paiement</label>
+                <select value={paymentMethodId} onChange={(e) => setPaymentMethodId(e.target.value)}>
+                  <option value="">—</option>
+                  {txnMethods.map((m) => (
+                    <option key={m.id} value={m.id}>{m.name} (#{m.id})</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+              <button onClick={() => console.log("DEBUG payload:", payload)} type="button">🧪 Debug console</button>
+              <button onClick={createOrder} disabled={loading} type="button">🧾 Créer la commande</button>
+            </div>
+          </div>
+        </div>
+
+        <details style={{ marginTop: 8 }}>
+          <summary>Payload (temps réel)</summary>
+          <pre style={{ background: "#0b1021", color: "#e6e6e6", padding: 12, borderRadius: 8, overflow: "auto" }}>
+            {JSON.stringify(payload, null, 2)}
+          </pre>
+        </details>
+      </fieldset>
+
+      <fieldset style={fs}>
+        <legend>Catalogues chargés</legend>
+        <details>
+          <summary>Produits</summary>
+          <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {dishes.slice(0, 80).map((x) => (
+              <span key={x.id} style={pill}>{x.name} (#{x.id})</span>
+            ))}
+            {dishes.length > 80 && <div style={muted}>+{dishes.length - 80} autres…</div>}
+          </div>
+        </details>
+        <details>
+          <summary>Menus</summary>
+          <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {menus.slice(0, 60).map((x) => (
+              <span key={x.id} style={pill}>{x.name} (#{x.id})</span>
+            ))}
+            {menus.length > 60 && <div style={muted}>+{menus.length - 60} autres…</div>}
+          </div>
+        </details>
+        <details>
+          <summary>Options</summary>
+          <div style={{ marginTop: 8 }}>
+            {optionsList.slice(0, 30).map((opt) => (
+              <div key={opt.id}>
+                <b>{opt.name}</b> (#{opt.id}) — {(opt.values || []).slice(0, 10).map((v) => `${v.name} (#${v.id})`).join(", ")}{(opt.values || []).length > 10 ? "…" : ""}
+              </div>
+            ))}
+            {optionsList.length > 30 && <div style={muted}>+{optionsList.length - 30} autres…</div>}
+          </div>
+        </details>
+      </fieldset>
+    </div>
+  );
+}
+
+// ====== Inline styles (quick & simple) ======
+const fs = { border: "1px solid #ddd", borderRadius: 10, padding: "12px 16px", margin: "12px 0" };
+const row = { display: "flex", gap: 12, flexWrap: "wrap" };
+const col = { flex: "1 1 240px", display: "flex", flexDirection: "column", gap: 6 };
+const muted = { color: "#666", fontSize: 12 };
+const pill = { display: "inline-block", padding: "4px 8px", border: "1px solid #ddd", borderRadius: 999, background: "#fafafa" };
