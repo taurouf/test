@@ -1,6 +1,0 @@
-{
-  "routes": [
-    { "src": "/api/zelty/.*", "dest": "/api/zelty.js" },
-    { "src": "/(.*)", "dest": "/" }
-  ]
-}
