@@ -1,0 +1,6 @@
+{
+  "rewrites": [
+    { "source": "/api/zelty/ping", "destination": "/api/zelty.js" },
+    { "source": "/api/zelty/(.*)", "destination": "/api/zelty.js" }
+  ]
+}
