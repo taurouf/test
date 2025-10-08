@@ -1,7 +1,7 @@
 // api/zelty/[...path].js
 const ALLOWED_BASES = {
   production: "https://api.zelty.fr/2.10",
-  staging:    "https://api.staging.zelty.co/2.10",
+  staging: "https://api.staging.zelty.co/2.10",
 };
 
 export default async function handler(req, res) {
@@ -13,32 +13,31 @@ export default async function handler(req, res) {
     return res.status(204).end();
   }
 
-  // Healthcheck simple: GET /api/zelty/ping
+  // 👉 Healthcheck accessible sans auth
   if (req.url === "/api/zelty/ping") {
     res.setHeader("Access-Control-Allow-Origin", req.headers.origin || "*");
-    return res.status(200).json({ ok: true, runtime: (process.env.VERCEL ? "vercel" : "local") });
+    res.setHeader("Content-Type", "application/json");
+    return res.status(200).send(JSON.stringify({ ok: true, runtime: process.env.VERCEL ? "vercel" : "local" }));
   }
 
-  // Base (env) et auth venant du front
+  // --- À partir d'ici: auth requise ---
   const baseKey = String(req.headers["x-zelty-base"] || "production");
   const API_BASE = ALLOWED_BASES[baseKey] || ALLOWED_BASES.production;
 
   const auth = req.headers["authorization"];
   if (!auth) {
     res.setHeader("Access-Control-Allow-Origin", req.headers.origin || "*");
-    return res.status(401).json({ error: "Missing Authorization" });
+    res.setHeader("Content-Type", "application/json");
+    return res.status(401).send(JSON.stringify({ error: "Missing Authorization" }));
   }
 
-  // [...path] -> tableau de segments
   const segments = req.query.path || [];
   const subPath = "/" + (Array.isArray(segments) ? segments.join("/") : String(segments));
-
   const target = new URL(API_BASE.replace(/\/$/, "") + subPath);
 
-  // querystring (ne pas renvoyer "path")
   for (const [k, v] of Object.entries(req.query || {})) {
     if (k === "path") continue;
-    if (Array.isArray(v)) v.forEach(x => target.searchParams.append(k, x));
+    if (Array.isArray(v)) v.forEach((x) => target.searchParams.append(k, x));
     else if (v != null) target.searchParams.set(k, String(v));
   }
 
@@ -48,7 +47,7 @@ export default async function handler(req, res) {
 
   const upstream = await fetch(target.toString(), {
     method: req.method,
-    headers: { "Content-Type": "application/json", "Authorization": auth },
+    headers: { "Content-Type": "application/json", Authorization: auth },
     body
   });
 
