@@ -5,7 +5,7 @@ const ALLOWED_BASES = {
 };
 
 export default async function handler(req, res) {
-  // CORS / préflight
+  // CORS / preflight
   if (req.method === "OPTIONS") {
     res.setHeader("Access-Control-Allow-Origin", req.headers.origin || "*");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Zelty-Base");
@@ -13,14 +13,17 @@ export default async function handler(req, res) {
     return res.status(204).end();
   }
 
-  // 👉 Healthcheck accessible sans auth
-  if (req.url === "/api/zelty/ping") {
+  // ---- PING SANS AUTH (détecté par les segments) ----
+  const seg = req.query?.path;
+  const segments = Array.isArray(seg) ? seg : (seg ? [seg] : []);
+  const isPing = req.method === "GET" && segments.length === 1 && segments[0] === "ping";
+  if (isPing) {
     res.setHeader("Access-Control-Allow-Origin", req.headers.origin || "*");
     res.setHeader("Content-Type", "application/json");
     return res.status(200).send(JSON.stringify({ ok: true, runtime: process.env.VERCEL ? "vercel" : "local" }));
   }
 
-  // --- À partir d'ici: auth requise ---
+  // ---- À partir d'ici: AUTH REQUISE ----
   const baseKey = String(req.headers["x-zelty-base"] || "production");
   const API_BASE = ALLOWED_BASES[baseKey] || ALLOWED_BASES.production;
 
@@ -31,13 +34,13 @@ export default async function handler(req, res) {
     return res.status(401).send(JSON.stringify({ error: "Missing Authorization" }));
   }
 
-  const segments = req.query.path || [];
-  const subPath = "/" + (Array.isArray(segments) ? segments.join("/") : String(segments));
+  const subPath = "/" + segments.join("/");
   const target = new URL(API_BASE.replace(/\/$/, "") + subPath);
 
+  // querystring (sauf "path")
   for (const [k, v] of Object.entries(req.query || {})) {
     if (k === "path") continue;
-    if (Array.isArray(v)) v.forEach((x) => target.searchParams.append(k, x));
+    if (Array.isArray(v)) v.forEach(x => target.searchParams.append(k, x));
     else if (v != null) target.searchParams.set(k, String(v));
   }
 
