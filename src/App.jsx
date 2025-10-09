@@ -549,12 +549,6 @@ function App() {
                     : "Déverrouiller"
                   : "Enregistrer"}
               </button>
-              <button className="btn-ghost" onClick={lockOut} disabled={!unlocked}>
-                Verrouiller
-              </button>
-              <button className="btn-ghost" onClick={resetPassphrase}>
-                Réinitialiser
-              </button>
               <button className="btn-ghost" onClick={handleLogout} disabled={!unlocked}>
                 Se déconnecter
               </button>
