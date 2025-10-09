@@ -1,0 +1,24 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body { @apply bg-slate-50 text-slate-800; }
+}
+
+@layer components {
+  .card      { @apply rounded-2xl bg-white/95 backdrop-blur border border-primary/10 shadow-soft; }
+  .label     { @apply text-sm font-medium text-primary; }
+  .input     { @apply w-full rounded-xl border border-primary/20 bg-white px-3 py-2.5 outline-none focus:ring-2 focus:ring-accent/60 focus:border-accent/60; }
+  .select    { @apply input; }
+  .btn       { @apply inline-flex items-center gap-2 rounded-xl px-4 py-2.5 font-semibold transition active:scale-[.98] shadow; }
+  .btn-primary { @apply btn text-white bg-primary hover:bg-primary/90 shadow-card; }
+  .btn-accent  { @apply btn text-primary bg-accent/15 hover:bg-accent/25 border border-accent/30; }
+  .btn-success { @apply btn text-white bg-success hover:bg-success/90; }
+  .btn-ghost   { @apply btn bg-white border border-primary/10 hover:bg-slate-50; }
+  .muted     { @apply text-xs text-slate-500; }
+
+  details > summary { @apply cursor-pointer select-none text-primary font-semibold; }
+  .section-title { @apply mb-4 text-lg font-semibold text-primary; }
+  .chip      { @apply inline-flex items-center gap-2 rounded-full border border-primary/20 bg-white px-3 py-1 text-sm; }
+}
