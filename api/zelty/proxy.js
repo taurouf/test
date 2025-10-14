@@ -11,6 +11,15 @@ function hasAuthCookie(req) {
   return cookie.split(/;\s*/).some(c => c.startsWith("zelty_auth=ok"));
 }
 
+function getCookie(req, name) {
+  const cookie = req.headers.cookie || "";
+  const m = cookie.split(/;\s*/).find(c => c.startsWith(name + "="));
+  if (!m) return null;
+  try {
+    return decodeURIComponent(m.split("=").slice(1).join("="));
+  } catch { return null; }
+}
+
 function stripTrailingSlash(s) {
   return s.replace(/\/+$/, "");
 }
@@ -51,7 +60,34 @@ export default async function handler(req, res) {
     if (req.headers.accept) fwd.set("Accept", req.headers.accept);
     if (req.headers["accept-language"]) fwd.set("Accept-Language", req.headers["accept-language"]);
 
-    const body = await getRawBody(req);
+    let body = await getRawBody(req);
+
+    /* ==========
+       WHITELIST : bloque POST /orders si id_restaurant non autorisé
+       Stockage côté serveur : cookie HttpOnly "wl" (JSON: [7326, 1234, ...])
+       ========== */
+    if (req.method === "POST" && restPath.startsWith("/orders")) {
+      try {
+        const wlRaw = getCookie(req, "wl") || "[]";
+        const wl = JSON.parse(wlRaw);
+        if (Array.isArray(wl) && wl.length) {
+          // On parse le body pour lire id_restaurant (en gardant le buffer pour forward)
+          const txt = body ? body.toString("utf8") : "{}";
+          const json = JSON.parse(txt || "{}");
+          const idRestaurant = Number(json?.id_restaurant);
+          if (!wl.includes(idRestaurant)) {
+            return res
+              .status(403)
+              .json({ ok: false, error: "Restaurant not allowed (whitelist)." });
+          }
+          // on réécrit le buffer (au cas où JSON.stringify altère l'ordre)
+          body = Buffer.from(txt, "utf8");
+        }
+      } catch (e) {
+        // si le parse échoue, on laisse passer, mais on garde la traçabilité
+        res.setHeader("X-Whitelist-Check", "parse_error");
+      }
+    }
 
     let upstream;
     try {

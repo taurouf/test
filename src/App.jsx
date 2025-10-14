@@ -183,8 +183,7 @@ function RequireAuth({ children }) {
 }
 
 /* ============================================================
-   Page principale "Création de commande" (ton contenu existant)
-   (J'ai retiré la section "Passphrase" du rendu.)
+   Page principale "Création de commande"
    ============================================================ */
 function OrderPage() {
   /* ——— État principal ——— */
@@ -242,6 +241,11 @@ function OrderPage() {
   const [paymentMethodId, setPaymentMethodId] = useState("");
   const [loading, setLoading] = useState(false);
 
+  // --- NOUVEAU : gestion whitelist côté client (copie d’info serveur)
+  const [whitelist, setWhitelist] = useState([]);
+  const [keyAllowed, setKeyAllowed] = useState(true);
+  const [allowMsg, setAllowMsg] = useState("");
+
   const navigate = useNavigate();
 
   // Bouton "Se déconnecter"
@@ -259,6 +263,7 @@ function OrderPage() {
     (async () => {
       try {
         setStatus("Chargement des catalogues…");
+        // 1) Restaurants (clé → on vérifie whitelist derrière)
         try {
           const r = await zfetch(API_BASE, "/restaurants", {
             apiKey,
@@ -267,7 +272,40 @@ function OrderPage() {
           const rs = r?.restaurants || [];
           setRestaurants(rs);
           if (rs.length === 1) setRestaurantId(String(rs[0].id));
+
+          // --- NOUVEAU : récupérer whitelist côté serveur, contrôler la clé/restaurant
+          try {
+            const wlRes = await fetch("/api/admin/whitelist", { cache: "no-store" });
+            if (wlRes.ok) {
+              const j = await wlRes.json();
+              const ids = Array.isArray(j.ids) ? j.ids.map(Number) : [];
+              setWhitelist(ids);
+
+              if (!ids.length) {
+                // whitelist vide => tout autorisé
+                setKeyAllowed(true);
+                setAllowMsg("");
+              } else {
+                const idsFromKey = (rs || []).map((rr) => Number(rr.id));
+                const ok = idsFromKey.some((id) => ids.includes(id));
+                setKeyAllowed(ok);
+                setAllowMsg(
+                  ok
+                    ? ""
+                    : "⚠️ Ce restaurant n’est pas dans la liste autorisée pour les envois de commandes test. Contactez Grégory."
+                );
+              }
+            } else {
+              setKeyAllowed(true);
+              setAllowMsg("");
+            }
+          } catch {
+            setKeyAllowed(true);
+            setAllowMsg("");
+          }
         } catch {}
+
+        // 2) Catalogues
         const d = await zfetch(API_BASE, "/catalog/dishes", {
           apiKey,
           baseKey: envName,
@@ -299,9 +337,28 @@ function OrderPage() {
     })();
   }, [apiKey, envName, canCall]);
 
+  // Règle “Agrégateur”
   useEffect(() => {
     if (!isAggregator && source && !LIMITED_SOURCES.includes(source)) setSource("");
   }, [isAggregator, source]);
+
+  // --- NOUVEAU : si l’utilisateur change de restaurant, revérifie whitelist
+  useEffect(() => {
+    if (!restaurantId) return;
+    const rid = Number(restaurantId);
+    if (whitelist.length) {
+      const ok = whitelist.includes(rid);
+      setKeyAllowed(ok);
+      setAllowMsg(
+        ok
+          ? ""
+          : "⚠️ Ce restaurant n’est pas dans la liste autorisée pour les envois de commandes test. Contactez Grégory."
+      );
+    } else {
+      setKeyAllowed(true);
+      setAllowMsg("");
+    }
+  }, [restaurantId, whitelist]);
 
   /* ——— Client: chargement par ID (bouton Recharger) ——— */
   async function loadCustomer() {
@@ -471,6 +528,8 @@ function OrderPage() {
     try {
       if (!canCall) throw new Error("Saisis la clé API.");
       if (!cart.length) throw new Error("Panier vide.");
+      if (!keyAllowed)
+        throw new Error("Restaurant non autorisé (whitelist). Contactez Grégory.");
 
       setLoading(true);
       setStatus("Création de la commande…");
@@ -536,6 +595,13 @@ function OrderPage() {
       </div>
 
       <main className="mx-auto max-w-6xl px-6 -mt-6 pb-16 space-y-6">
+        {/* BANNIÈRE whitelist */}
+        {!keyAllowed && allowMsg && (
+          <div className="card px-5 py-3 border-red-200 bg-red-50 text-red-700">
+            {allowMsg}
+          </div>
+        )}
+
         {/* Statut */}
         {status && (
           <div className="card px-5 py-3 border-accent/30">
@@ -1148,8 +1214,9 @@ function OrderPage() {
               </button>
               <button
                 type="button"
-                className="btn-success"
-                disabled={loading || !canCall}
+                className={`btn-success ${(!keyAllowed) ? "opacity-60 cursor-not-allowed" : ""}`}
+                disabled={loading || !canCall || !keyAllowed}
+                title={!keyAllowed ? "Restaurant non autorisé (whitelist)." : ""}
                 onClick={createOrder}
               >
                 {loading ? "Création…" : "🧾 Créer la commande"}
