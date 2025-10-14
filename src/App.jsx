@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import "./index.css";
 
 /* =========================
@@ -33,7 +34,7 @@ const AGG_SOURCES = [
 const LIMITED_SOURCES = ["web", "mobile", "kiosk"];
 
 /* =========================
-   Utils
+   Utils (fetch proxy)
    ========================= */
 async function zfetch(
   apiBase,
@@ -66,110 +67,126 @@ async function zfetch(
   return res.json();
 }
 
-// Hash SHA-256 (hex) pour la passphrase (fallback local)
-async function sha256Hex(str) {
-  const buf = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(str)
+/* =================================================================
+   Page de connexion (saisit la passphrase, appelle /api/auth/login)
+   ================================================================= */
+function LoginPage() {
+  const [pass, setPass] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+  const navigate = useNavigate();
+  const location = useLocation();
+  const from = location.state?.from?.pathname || "/";
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setErr("");
+    setLoading(true);
+    try {
+      const r = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ passphrase: pass }),
+      });
+      if (!r.ok) {
+        const t = await r.text().catch(() => "");
+        throw new Error(t || "Passphrase invalide");
+      }
+      navigate(from, { replace: true });
+    } catch (e) {
+      setErr("Passphrase invalide.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-[#F5FAFF] flex items-center justify-center p-6">
+      <div className="w-full max-w-md">
+        <div className="bg-white/90 rounded-2xl shadow-xl p-8 border border-[#4CBEFA]/10">
+          <h1 className="text-2xl font-semibold text-[#082C49] mb-2">Connexion</h1>
+          <p className="text-sm text-[#082C49]/70 mb-6">
+            Entrez votre passphrase pour accéder à la création de commande.
+          </p>
+
+          {err && (
+            <div className="mb-4 rounded-lg bg-red-50 text-red-700 text-sm px-3 py-2 border border-red-200">
+              {err}
+            </div>
+          )}
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <label className="block text-sm font-medium text-[#082C49]">
+              Passphrase
+              <input
+                type="password"
+                className="mt-2 w-full rounded-xl border border-[#082C49]/15 focus:border-[#4CBEFA] focus:ring-2 focus:ring-[#4CBEFA]/30 px-3 py-2 outline-none"
+                value={pass}
+                onChange={(e) => setPass(e.target.value)}
+                placeholder="********"
+                autoFocus
+              />
+            </label>
+
+            <button
+              type="submit"
+              disabled={loading || !pass.trim()}
+              className="w-full flex items-center justify-center rounded-xl bg-[#082C49] hover:bg-[#063355] text-white py-2.5 transition disabled:opacity-60"
+            >
+              {loading ? "Vérification..." : "Se connecter"}
+            </button>
+          </form>
+
+          <p className="mt-4 text-xs text-[#082C49]/50">
+            Accès sécurisé. Cookie de session HttpOnly (7 jours).
+          </p>
+        </div>
+      </div>
+    </div>
   );
-  return Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
 }
 
-/* =========================
-   Composant
-   ========================= */
-function App() {
-  /* ——— Passphrase lock ——— */
-  const [unlocked, setUnlocked] = useState(false);
-  const [passphraseInput, setPassphraseInput] = useState("");
-  const [hasStoredHash, setHasStoredHash] = useState(false);
-  const [serverAuthAvailable, setServerAuthAvailable] = useState(true); // on tentera login serveur d’abord
+/* =======================================
+   Garde d'authentification (RequireAuth)
+   ======================================= */
+function RequireAuth({ children }) {
+  const [ok, setOk] = useState(null);
+  const location = useLocation();
 
   useEffect(() => {
-    const stored = localStorage.getItem("zelty_passphrase_hash");
-    setHasStoredHash(!!stored);
-    setUnlocked(false);
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch("/api/auth/session", { cache: "no-store" });
+        const j = await r.json();
+        if (alive) setOk(Boolean(j.authorized));
+      } catch {
+        if (alive) setOk(false);
+      }
+    })();
+    return () => { alive = false; };
   }, []);
 
-  // Déverrouillage : tente serveur, sinon fallback local
-  async function handleUnlock() {
-    const entered = passphraseInput.trim();
-    if (!entered) return;
-
-    // 1) Tentative côté serveur
-    if (serverAuthAvailable) {
-      try {
-        const r = await fetch("/api/auth/login", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ passphrase: entered }),
-        });
-        if (r.ok) {
-          setUnlocked(true);
-          setStatus("🔓 Déverrouillé (serveur).");
-          setPassphraseInput("");
-          return;
-        } else if (r.status === 404) {
-          // route absente => on bascule en mode local
-          setServerAuthAvailable(false);
-        } else {
-          setUnlocked(false);
-          setStatus("❌ Passphrase invalide (serveur).");
-          setPassphraseInput("");
-          return;
-        }
-      } catch {
-        // Réseau/route indispo → on bascule local
-        setServerAuthAvailable(false);
-      }
-    }
-
-    // 2) Fallback local (hash en localStorage)
-    const enteredHash = await sha256Hex(entered);
-    const stored = localStorage.getItem("zelty_passphrase_hash");
-
-    if (stored) {
-      if (enteredHash === stored) {
-        setUnlocked(true);
-        setStatus("🔓 Déverrouillé (local).");
-      } else {
-        setStatus("❌ Passphrase invalide (local).");
-      }
-    } else {
-      localStorage.setItem("zelty_passphrase_hash", enteredHash);
-      setUnlocked(true);
-      setHasStoredHash(true);
-      setStatus("🔐 Passphrase enregistrée localement.");
-    }
-    setPassphraseInput("");
+  if (ok === null) {
+    return (
+      <div className="min-h-screen grid place-items-center text-[#082C49]/70">
+        Vérification de la session…
+      </div>
+    );
   }
 
-  function lockOut() {
-    setUnlocked(false);
-    setStatus("🔒 Verrouillé.");
+  if (!ok) {
+    return <Navigate to="/login" replace state={{ from: location }} />;
   }
 
-  function resetPassphrase() {
-    localStorage.removeItem("zelty_passphrase_hash");
-    setUnlocked(false);
-    setHasStoredHash(false);
-    setStatus("🔁 Passphrase réinitialisée (local).");
-  }
+  return children;
+}
 
-  async function handleLogout() {
-    // Si mode serveur disponible, on efface le cookie HttpOnly
-    try {
-      await fetch("/api/auth/logout", { method: "POST" });
-    } catch {
-      /* ignore */
-    }
-    // Reverrouille l’app côté front
-    setUnlocked(false);
-    setStatus("🔒 Déconnecté.");
-  }
-
+/* ============================================================
+   Page principale "Création de commande" (ton contenu existant)
+   (J'ai retiré la section "Passphrase" du rendu.)
+   ============================================================ */
+function OrderPage() {
   /* ——— État principal ——— */
   const [envName, setEnvName] = useState("production");
   const [apiKey, setApiKey] = useState("");
@@ -225,8 +242,16 @@ function App() {
   const [paymentMethodId, setPaymentMethodId] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // Verrou global des appels
-  const canCall = Boolean(apiKey) && apiKey.length > 8 && unlocked;
+  const navigate = useNavigate();
+
+  // Bouton "Se déconnecter"
+  async function handleLogout() {
+    try { await fetch("/api/auth/logout", { method: "POST" }); } catch {}
+    navigate("/login", { replace: true });
+  }
+
+  // Les appels API sont autorisés si une clé est présente
+  const canCall = Boolean(apiKey) && apiKey.length > 8;
 
   /* ——— Catalogues ——— */
   useEffect(() => {
@@ -281,7 +306,7 @@ function App() {
   /* ——— Client: chargement par ID (bouton Recharger) ——— */
   async function loadCustomer() {
     if (!canCall || !customerId) {
-      setStatus("🔒 Verrouillé ou ID client manquant.");
+      setStatus("🧷 Clé API manquante ou ID client vide.");
       return;
     }
     setCustomerLoading(true);
@@ -444,7 +469,7 @@ function App() {
   /* ——— Création commande ——— */
   async function createOrder() {
     try {
-      if (!canCall) throw new Error("🔒 Verrouillé : saisis la passphrase.");
+      if (!canCall) throw new Error("Saisis la clé API.");
       if (!cart.length) throw new Error("Panier vide.");
 
       setLoading(true);
@@ -494,14 +519,19 @@ function App() {
     <div className="min-h-screen">
       {/* En-tête */}
       <div className="bg-hero-grad text-white">
-        <div className="mx-auto max-w-6xl px-6 py-8">
-          <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight">
-            Zelty – Création de commande
-          </h1>
-          <p className="mt-2 text-white/80">
-            Choisis l’environnement, puis renseigne la clé API pour charger les
-            catalogues.
-          </p>
+        <div className="mx-auto max-w-6xl px-6 py-8 flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight">
+              Zelty – Création de commande
+            </h1>
+            <p className="mt-2 text-white/80">
+              Choisis l’environnement, puis renseigne la clé API pour charger les
+              catalogues.
+            </p>
+          </div>
+          <button className="btn-ghost bg-white/10 hover:bg-white/20" onClick={handleLogout}>
+            Se déconnecter
+          </button>
         </div>
       </div>
 
@@ -513,49 +543,6 @@ function App() {
           </div>
         )}
 
-        {/* Passphrase */}
-        <section className="card p-4">
-          <div className="flex flex-col md:flex-row md:items-end gap-3">
-            <div className="flex-1">
-              <label className="label">
-                {serverAuthAvailable
-                  ? "Passphrase (vérifiée côté serveur)"
-                  : hasStoredHash
-                  ? "Passphrase (mode local)"
-                  : "Créer une passphrase (mode local, stockée sur cet appareil)"}
-              </label>
-              <input
-                className="input"
-                type="password"
-                value={passphraseInput}
-                onChange={(e) => setPassphraseInput(e.target.value)}
-                placeholder={hasStoredHash ? "••••••••" : "Choisis une passphrase"}
-              />
-              <p className="muted mt-1">
-                {unlocked
-                  ? "Statut : déverrouillé – les appels API sont autorisés."
-                  : "Statut : verrouillé – aucun appel API ne sera effectué."}
-              </p>
-            </div>
-            <div className="flex gap-2">
-              <button className="btn-primary" onClick={handleUnlock}>
-                {serverAuthAvailable
-                  ? unlocked
-                    ? "Vérifier à nouveau"
-                    : "Déverrouiller"
-                  : hasStoredHash
-                  ? unlocked
-                    ? "Vérifier à nouveau"
-                    : "Déverrouiller"
-                  : "Enregistrer"}
-              </button>
-              <button className="btn-ghost" onClick={handleLogout} disabled={!unlocked}>
-                Se déconnecter
-              </button>
-            </div>
-          </div>
-        </section>
-
         {/* 1) Env & Auth */}
         <section className="card p-6">
           <h2 className="section-title">1) Environnement & authentification</h2>
@@ -566,7 +553,6 @@ function App() {
                 className="select"
                 value={envName}
                 onChange={(e) => setEnvName(e.target.value)}
-                disabled={!unlocked}
               >
                 <option value="production">Production</option>
                 <option value="staging">Staging</option>
@@ -584,7 +570,6 @@ function App() {
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value.trim())}
                 placeholder="zk_live_***"
-                disabled={!unlocked}
               />
             </div>
             <div>
@@ -593,7 +578,6 @@ function App() {
                 className="select"
                 value={restaurantId}
                 onChange={(e) => setRestaurantId(e.target.value)}
-                disabled={!unlocked}
               >
                 <option value="">—</option>
                 {restaurants.map((r) => (
@@ -615,7 +599,6 @@ function App() {
                 className="select"
                 value={mode}
                 onChange={(e) => setMode(e.target.value)}
-                disabled={!unlocked}
               >
                 {MODE_OPTIONS.map((m) => (
                   <option key={m.value} value={m.value}>
@@ -632,7 +615,6 @@ function App() {
                 className="h-5 w-5 accent-accent"
                 checked={isAggregator}
                 onChange={(e) => setIsAggregator(e.target.checked)}
-                disabled={!unlocked}
               />
               <label htmlFor="agg" className="label !mb-0">
                 Agrégateur ?
@@ -648,7 +630,6 @@ function App() {
                     className="select"
                     value={source}
                     onChange={(e) => setSource(e.target.value)}
-                    disabled={!unlocked}
                   >
                     <option value="">—</option>
                     {sourceOptions.map((s) => (
@@ -673,7 +654,6 @@ function App() {
                 type="datetime-local"
                 value={dueDate}
                 onChange={(e) => setDueDate(e.target.value)}
-                disabled={!unlocked}
               />
             </div>
           </div>
@@ -686,7 +666,6 @@ function App() {
                 className="h-5 w-5 accent-accent"
                 checked={addCustomer}
                 onChange={(e) => setAddCustomer(e.target.checked)}
-                disabled={!unlocked}
               />
               <label htmlFor="addc" className="label !mb-0">
                 Ajouter un client ?
@@ -704,7 +683,6 @@ function App() {
                     value={customerId}
                     onChange={(e) => setCustomerId(e.target.value)}
                     placeholder="123456"
-                    disabled={!unlocked}
                   />
                   <p className="muted mt-1">
                     Renseigne un ID pour prévisualiser le client existant ; sinon,
@@ -956,12 +934,19 @@ function App() {
                                                 ? [...now, String(v.id)]
                                                 : [String(v.id)]
                                               : now.filter((x) => x !== String(v.id));
-                                            updateLine(idx, {
-                                              optionSelections: {
-                                                ...(line.optionSelections || {}),
-                                                [opt.id]: next,
-                                              },
-                                            });
+                                            setCart((prev) =>
+                                              prev.map((l, index) =>
+                                                index === idx
+                                                  ? {
+                                                      ...l,
+                                                      optionSelections: {
+                                                        ...(l.optionSelections || {}),
+                                                        [opt.id]: next,
+                                                      },
+                                                    }
+                                                  : l
+                                              )
+                                            );
                                           }}
                                         />
                                         {v.name}{" "}
@@ -985,12 +970,19 @@ function App() {
                       {(findMenu(line.menuId)?.parts || []).map((p) => {
                         const choice = line.menuChoices?.[p.id] || {};
                         const setChoice = (patch) =>
-                          updateLine(idx, {
-                            menuChoices: {
-                              ...(line.menuChoices || {}),
-                              [p.id]: { ...(line.menuChoices?.[p.id] || {}), ...patch },
-                            },
-                          });
+                          setCart((prev) =>
+                            prev.map((l, index) =>
+                              index === idx
+                                ? {
+                                    ...l,
+                                    menuChoices: {
+                                      ...(l.menuChoices || {}),
+                                      [p.id]: { ...(l.menuChoices?.[p.id] || {}), ...patch },
+                                    },
+                                  }
+                                : l
+                            )
+                          );
 
                         return (
                           <div
@@ -1192,4 +1184,24 @@ function Input({ label, v, set, ...rest }) {
   );
 }
 
-export default App;
+/* =========================
+   App racine (router)
+   ========================= */
+export default function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route
+          path="/"
+          element={
+            <RequireAuth>
+              <OrderPage />
+            </RequireAuth>
+          }
+        />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </BrowserRouter>
+  );
+}
