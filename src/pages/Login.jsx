@@ -37,7 +37,7 @@ export default function LoginPage() {
         <div className="bg-white/90 rounded-2xl shadow-xl p-8 border border-[#4CBEFA]/10">
           <h1 className="text-2xl font-semibold text-[#082C49] mb-2">Connexion</h1>
           <p className="text-sm text-[#082C49]/70 mb-6">
-            Entrez votre passphrase pour accéder à la création de commande.
+            Entrez le mot de passe pour accéder à la création de commande.
           </p>
 
           {err && (
@@ -48,7 +48,7 @@ export default function LoginPage() {
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <label className="block text-sm font-medium text-[#082C49]">
-              Passphrase
+              mot de passe
               <input
                 type="password"
                 className="mt-2 w-full rounded-xl border border-[#082C49]/15 focus:border-[#4CBEFA] focus:ring-2 focus:ring-[#4CBEFA]/30 px-3 py-2 outline-none"
@@ -67,10 +67,6 @@ export default function LoginPage() {
               {loading ? "Vérification..." : "Se connecter"}
             </button>
           </form>
-
-          <p className="mt-4 text-xs text-[#082C49]/50">
-            Accès sécurisé. Cookie de session HttpOnly (7 jours).
-          </p>
         </div>
       </div>
     </div>
