@@ -1,119 +1,63 @@
 // /api/admin/whitelist.js
-import { wlGet, wlSet, normalizeEnv, hasKvConfigured } from "../_lib/whitelist.js";
+import { readWhitelist, writeWhitelist, envFromReq } from "../_lib/whitelist.js";
 
 export const config = { runtime: "nodejs" };
 
-const COOKIE_NAME = "wl";
-const COOKIE_MAX_AGE = 60 * 60 * 24; // 1 jour
-
-export default async function handler(req, res) {
-  // CORS / preflight au cas où
-  if (req.method === "OPTIONS") {
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-admin-password");
-    res.setHeader("Access-Control-Allow-Credentials", "true");
-    res.statusCode = 204;
-    res.end();
-    return;
+function ensureLogged(req) {
+  const ck = req.headers.cookie || "";
+  const ok = ck.split(/;\s*/).some(c => c.trim() === "zelty_auth=ok");
+  if (!ok) {
+    const e = new Error("UNAUTHORIZED");
+    e.code = 401;
+    throw e;
   }
-  // ... reste du code
-}
-
-function setJson(res, status, obj, extra = {}) {
-  res.statusCode = status;
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.setHeader("Cache-Control", "no-store");
-  // Autorise le cookie côté même domaine
-  res.setHeader("Vary", "Cookie");
-  for (const [k, v] of Object.entries(extra)) res.setHeader(k, v);
-  res.end(JSON.stringify(obj));
-}
-
-function setWhitelistCookie(res, ids) {
-  const val = encodeURIComponent(JSON.stringify(ids || []));
-  res.setHeader(
-    "Set-Cookie",
-    `${COOKIE_NAME}=${val}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${COOKIE_MAX_AGE}`
-  );
-}
-
-function getEnvFromQuery(req) {
-  const url = new URL(req.url, `http://${req.headers.host}`);
-  return normalizeEnv(url.searchParams.get("env"));
-}
-
-function readBody(req) {
-  return new Promise((resolve) => {
-    if (req.method === "GET" || req.method === "HEAD") return resolve({});
-    const chunks = [];
-    req.on("data", (c) => chunks.push(c));
-    req.on("end", () => {
-      const raw = Buffer.concat(chunks).toString("utf8");
-      try {
-        resolve(raw ? JSON.parse(raw) : {});
-      } catch {
-        resolve({});
-      }
-    });
-  });
-}
-
-function isAdmin(req) {
-  const pass = req.headers["x-admin-password"];
-  const expected = String(process.env.ADMIN_PASSWORD || "");
-  return expected && String(pass) === expected;
 }
 
 export default async function handler(req, res) {
   try {
-    const url = new URL(req.url, `http://${req.headers.host}`);
-    const env = getEnvFromQuery(req);
-
-    // Mode diagnostic simple : /api/admin/whitelist?diag=1
-    if (url.searchParams.get("diag") === "1") {
-      return setJson(res, 200, {
-        ok: true,
-        env,
-        hasKV: hasKvConfigured(),
-      });
-    }
+    ensureLogged(req);
+    const env = envFromReq(req);
 
     if (req.method === "GET") {
-      // Jamais d’erreur ici : wlGet renvoie [] si KV down
-      const ids = await wlGet(env);
-      setWhitelistCookie(res, ids); // cookie pour le proxy
-      return setJson(res, 200, { ok: true, ids, env });
+      const list = await readWhitelist(env);
+      // On synchronise aussi un cookie env utilisé côté serveur
+      res.setHeader("Set-Cookie", `w1_by_env=${encodeURIComponent(env)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`);
+      return res.json({ ok: true, env, ids: list });
     }
 
-    if (req.method === "POST") {
-      if (!isAdmin(req)) {
-        return setJson(res, 401, { ok: false, error: "Unauthorized (admin)" });
-      }
-
-      const body = await readBody(req);
-      let current = await wlGet(env);
-
-      if (Array.isArray(body?.ids)) {
-        current = body.ids;
-      } else if (Number.isFinite(Number(body?.add))) {
-        const id = Number(body.add);
-        current = [...new Set([...(current || []), id])];
-      } else if (Number.isFinite(Number(body?.remove))) {
-        const id = Number(body.remove);
-        current = (current || []).filter((x) => x !== id);
-      } else {
-        return setJson(res, 400, { ok: false, error: "Invalid body" });
-      }
-
-      const saved = await wlSet(env, current);
-      setWhitelistCookie(res, saved);
-      return setJson(res, 200, { ok: true, ids: saved, env });
+    if (req.method === "PUT") {
+      const body = await getBody(req);
+      const raw = String(body?.ids ?? "");
+      const ids = raw
+        .split(/[\n,]+/)
+        .map(s => s.trim())
+        .filter(Boolean)
+        .map(Number)
+        .filter(n => Number.isFinite(n));
+      await writeWhitelist(env, ids);
+      res.setHeader("Set-Cookie", `w1_by_env=${encodeURIComponent(env)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`);
+      return res.json({ ok: true, saved: ids.length });
     }
 
-    return setJson(res, 405, { ok: false, error: "Method Not Allowed" }, { Allow: "GET, POST" });
+    res.setHeader("Allow", "GET, PUT");
+    return res.status(405).json({ ok: false, error: "Method Not Allowed" });
   } catch (e) {
-    // On renvoie une erreur JSON lisible, et surtout on N'EXPOSE PAS l'exception complète
-    console.error("whitelist api error:", e);
-    return setJson(res, 200, { ok: false, error: "server_error" });
+    const code = e.code || 500;
+    return res.status(code).json({ ok: false, error: String(e.message || e) });
   }
+}
+
+function getBody(req) {
+  return new Promise((resolve, reject) => {
+    let b = "";
+    req.on("data", (c) => (b += c));
+    req.on("end", () => {
+      try {
+        resolve(b ? JSON.parse(b) : {});
+      } catch (e) {
+        reject(e);
+      }
+    });
+    req.on("error", reject);
+  });
 }
