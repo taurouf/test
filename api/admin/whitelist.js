@@ -1,50 +1,106 @@
-import { getWhitelist, addToWhitelist, removeFromWhitelist } from '../_lib/whitelist';
+// /api/admin/whitelist.js
+import { wlGet, wlSet, normalizeEnv, hasKvConfigured } from "../_lib/whitelist.js";
 
-function ok(res, data) {
-  res.setHeader('Content-Type', 'application/json');
-  res.status(200).end(JSON.stringify(data));
+export const config = { runtime: "nodejs" };
+
+const COOKIE_NAME = "wl";
+const COOKIE_MAX_AGE = 60 * 60 * 24; // 1 jour
+
+function setJson(res, status, obj, extra = {}) {
+  res.statusCode = status;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store");
+  // Autorise le cookie côté même domaine
+  res.setHeader("Vary", "Cookie");
+  for (const [k, v] of Object.entries(extra)) res.setHeader(k, v);
+  res.end(JSON.stringify(obj));
 }
 
-function bad(res, code = 400, message = 'Bad request') {
-  res.setHeader('Content-Type', 'application/json');
-  res.status(code).end(JSON.stringify({ error: message }));
+function setWhitelistCookie(res, ids) {
+  const val = encodeURIComponent(JSON.stringify(ids || []));
+  res.setHeader(
+    "Set-Cookie",
+    `${COOKIE_NAME}=${val}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${COOKIE_MAX_AGE}`
+  );
 }
 
-function requireAdmin(req) {
-  const expected = process.env.ADMIN_PASSWORD;
-  const got = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-  return expected && got && got === expected;
+function getEnvFromQuery(req) {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  return normalizeEnv(url.searchParams.get("env"));
+}
+
+function readBody(req) {
+  return new Promise((resolve) => {
+    if (req.method === "GET" || req.method === "HEAD") return resolve({});
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => {
+      const raw = Buffer.concat(chunks).toString("utf8");
+      try {
+        resolve(raw ? JSON.parse(raw) : {});
+      } catch {
+        resolve({});
+      }
+    });
+  });
+}
+
+function isAdmin(req) {
+  const pass = req.headers["x-admin-password"];
+  const expected = String(process.env.ADMIN_PASSWORD || "");
+  return expected && String(pass) === expected;
 }
 
 export default async function handler(req, res) {
   try {
-    if (!requireAdmin(req)) return bad(res, 401, 'Unauthorized');
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const env = getEnvFromQuery(req);
 
-    const env = (req.query.env || process.env.APP_ENV || 'staging').toString();
-    if (!['staging', 'production'].includes(env)) return bad(res, 400, 'env must be staging|production');
-
-    if (req.method === 'GET') {
-      const list = await getWhitelist(env);
-      return ok(res, { env, whitelist: list });
+    // Mode diagnostic simple : /api/admin/whitelist?diag=1
+    if (url.searchParams.get("diag") === "1") {
+      return setJson(res, 200, {
+        ok: true,
+        env,
+        hasKV: hasKvConfigured(),
+      });
     }
 
-    if (req.method === 'POST') {
-      const { id } = req.body || {};
-      if (!id) return bad(res, 422, 'id is required');
-      const list = await addToWhitelist(env, id);
-      return ok(res, { env, whitelist: list });
+    if (req.method === "GET") {
+      // Jamais d’erreur ici : wlGet renvoie [] si KV down
+      const ids = await wlGet(env);
+      setWhitelistCookie(res, ids); // cookie pour le proxy
+      return setJson(res, 200, { ok: true, ids, env });
     }
 
-    if (req.method === 'DELETE') {
-      const { id } = req.body || {};
-      if (!id) return bad(res, 422, 'id is required');
-      const list = await removeFromWhitelist(env, id);
-      return ok(res, { env, whitelist: list });
+    if (req.method === "POST") {
+      if (!isAdmin(req)) {
+        return setJson(res, 401, { ok: false, error: "Unauthorized (admin)" });
+      }
+
+      const body = await readBody(req);
+      let current = await wlGet(env);
+
+      if (Array.isArray(body?.ids)) {
+        current = body.ids;
+      } else if (Number.isFinite(Number(body?.add))) {
+        const id = Number(body.add);
+        current = [...new Set([...(current || []), id])];
+      } else if (Number.isFinite(Number(body?.remove))) {
+        const id = Number(body.remove);
+        current = (current || []).filter((x) => x !== id);
+      } else {
+        return setJson(res, 400, { ok: false, error: "Invalid body" });
+      }
+
+      const saved = await wlSet(env, current);
+      setWhitelistCookie(res, saved);
+      return setJson(res, 200, { ok: true, ids: saved, env });
     }
 
-    return bad(res, 405, 'Method not allowed');
+    return setJson(res, 405, { ok: false, error: "Method Not Allowed" }, { Allow: "GET, POST" });
   } catch (e) {
-    console.error(e);
-    return bad(res, 500, 'Server error');
+    // On renvoie une erreur JSON lisible, et surtout on N'EXPOSE PAS l'exception complète
+    console.error("whitelist api error:", e);
+    return setJson(res, 200, { ok: false, error: "server_error" });
   }
 }
