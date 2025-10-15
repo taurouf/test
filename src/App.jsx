@@ -79,6 +79,23 @@ const LIMITED_SOURCES = ["web", "mobile", "kiosk"];
 /* =========================
    Utils (fetch proxy)
    ========================= */
+// —— Rate limiter global (1 requête / seconde) ——
+let __rlChain = Promise.resolve();
+let __rlLast = 0;
+const __RL_GAP_MS = 1000; // 1s entre chaque requête
+
+function __rateLimitSchedule() {
+  __rlChain = __rlChain.then(async () => {
+    const now = Date.now();
+    const wait = Math.max(0, __rlLast + __RL_GAP_MS - now);
+    if (wait) {
+      await new Promise((r) => setTimeout(r, wait));
+    }
+    __rlLast = Date.now();
+  });
+  return __rlChain;
+}
+
 async function zfetch(
   apiBase,
   path,
@@ -94,6 +111,7 @@ async function zfetch(
       else url.searchParams.set(k, String(v));
     });
   }
+  await __rateLimitSchedule();
   const res = await fetch(url.toString(), {
     method,
     headers: {
@@ -548,27 +566,25 @@ function OrderPage() {
     (async () => {
       try {
         setStatus("Chargement des catalogues…");
-        const [d, m, o, t] = await Promise.all([
-          zfetch(API_BASE, "/catalog/dishes", {
-            apiKey,
-            baseKey: envName,
-            params: { lang: "fr", limit: 2000 },
-          }),
-          zfetch(API_BASE, "/catalog/menus", {
-            apiKey,
-            baseKey: envName,
-            params: { lang: "fr", limit: 1000 },
-          }),
-          zfetch(API_BASE, "/catalog/options", {
-            apiKey,
-            baseKey: envName,
-            params: { lang: "fr", limit: 2000 },
-          }),
-          zfetch(API_BASE, "/transaction-methods", {
-            apiKey,
-            baseKey: envName,
-          }),
-        ]);
+        const d = await zfetch(API_BASE, "/catalog/dishes", {
+          apiKey,
+          baseKey: envName,
+          params: { lang: "fr", limit: 2000 },
+        });
+        const m = await zfetch(API_BASE, "/catalog/menus", {
+          apiKey,
+          baseKey: envName,
+          params: { lang: "fr", limit: 1000 },
+        });
+        const o = await zfetch(API_BASE, "/catalog/options", {
+          apiKey,
+          baseKey: envName,
+          params: { lang: "fr", limit: 2000 },
+        });
+        const t = await zfetch(API_BASE, "/transaction-methods", {
+          apiKey,
+          baseKey: envName,
+        });
         setDishes(d?.dishes || []);
         setMenus(m?.menus || []);
         setOptionsList(o?.options || []);
