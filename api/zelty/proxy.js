@@ -18,6 +18,28 @@ function cookieHasAuth(req) {
   return ck.split(/;\s*/).some(c => c.trim() === "zelty_auth=ok");
 }
 
+function extractRestaurantId(json) {
+  if (!json) return 0;
+  // Ton cas principal
+  if (Array.isArray(json.restaurants) && json.restaurants.length) {
+    return Number(json.restaurants[0]?.id || json.restaurants[0]?.id_restaurant || 0);
+  }
+  // Autres formes possibles qu’on a vues
+  if (Array.isArray(json.data) && json.data.length) {
+    return Number(json.data[0]?.id || json.data[0]?.id_restaurant || 0);
+  }
+  if (json.restaurant) {
+    return Number(json.restaurant.id || json.restaurant.id_restaurant || 0);
+  }
+  if (Array.isArray(json) && json.length) {
+    return Number(json[0]?.id || json[0]?.id_restaurant || 0);
+  }
+  if (json.id || json.id_restaurant) {
+    return Number(json.id || json.id_restaurant);
+  }
+  return 0;
+}
+
 export default async function handler(req, res) {
   if (!cookieHasAuth(req)) {
     return res.status(401).json({ ok: false, error: "Not logged" });
@@ -26,31 +48,47 @@ export default async function handler(req, res) {
   const env = envFromReq(req);
   const base = BASES[env] || BASES.production;
 
-  // On passe le path voulu en query: ?path=/restaurants
   const url = new URL(req.url, "http://x");
-  const path = url.searchParams.get("path") || "/ping";
 
-  // Garde : tout sauf /restaurants nécessite wl_ok=1
+  // 1) on accepte ?path=/... OU bien /api/zelty/<...>
+  let path = url.searchParams.get("path") || "";
+  if (!path) {
+    const pn = url.pathname; // ex: /api/zelty/restaurants
+    if (pn.startsWith("/api/zelty")) {
+      path = pn.slice("/api/zelty".length) || "/";
+    }
+  }
+  if (!path.startsWith("/")) path = `/${path}`;
+
+  // Reconstituer la query (en enlevant notre param interne 'path')
+  const sp = new URLSearchParams(url.searchParams);
+  sp.delete("path");
+  const query = sp.toString();
+  const target = base + path + (query ? `?${query}` : "");
+
+  // 2) garde-whitelist : tout sauf /restaurants nécessite wl_ok=1
   if (path !== "/restaurants") {
     const wlOk = cookieGet(req, "wl_ok");
     if (wlOk !== "1") {
       return res.status(403).json({
         ok: false,
         error: "NOT_WHITELISTED",
-        message: "Ce restaurant n'est pas autorisé à recevoir des commandes de test. Contactez Grégory.",
+        message:
+          "Ce restaurant n'est pas autorisé à recevoir des commandes de test. Contactez Grégory.",
       });
     }
   }
 
-  // Proxy upstream
-  const target = base + path + (url.searchParams.get("qs") || "");
+  // 3) proxy upstream
   const method = req.method;
   const headers = { "Content-Type": "application/json" };
 
-  // On forward seulement l'Authorization : Bearer <API_KEY>
+  // on ne forward que le Bearer
   const auth = req.headers["authorization"] || "";
   if (!auth.startsWith("Bearer ")) {
-    return res.status(400).json({ ok: false, error: "Missing Authorization Bearer <API_KEY>" });
+    return res
+      .status(400)
+      .json({ ok: false, error: "Missing Authorization Bearer <API_KEY>" });
   }
   headers["Authorization"] = auth;
 
@@ -66,22 +104,17 @@ export default async function handler(req, res) {
     return res.status(502).json({ ok: false, error: "Bad gateway", detail: String(e) });
   }
 
-  // Cas spécial : /restaurants => on calcule wl et on set cookies
+  // 4) cas spécial /restaurants : on calcule wl et on pose les cookies
   if (path === "/restaurants") {
-    let json;
+    let json = null;
     try {
       json = await upstream.json();
     } catch {
-      json = null;
+      // si pas de json, renvoyer tel quel
     }
 
     if (upstream.ok && json) {
-      // Zelty renvoie typiquement { data: [ { id, name, ... } ] } ou un tableau direct
-      const item = Array.isArray(json?.data) ? json.data[0]
-                 : Array.isArray(json) ? json[0]
-                 : json?.restaurant || json?.data || null;
-
-      const rid = Number(item?.id || item?.id_restaurant || 0);
+      const rid = extractRestaurantId(json);
       let allowed = false;
       if (rid) {
         try {
@@ -91,29 +124,28 @@ export default async function handler(req, res) {
           allowed = false;
         }
       }
-      // Cookies HttpOnly pour la suite
       const cookies = [
-        `rid=${encodeURIComponent(String(rid || ""))}; Path=/; HttpOnly; SameSite=Lax`,
-        `wl_ok=${allowed ? "1" : "0"}; Path=/; HttpOnly; SameSite=Lax`,
-        `w1_by_env=${encodeURIComponent(env)}; Path=/; HttpOnly; SameSite=Lax`,
+        `rid=${encodeURIComponent(String(rid || ""))}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`,
+        `wl_ok=${allowed ? "1" : "0"}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`,
+        `w1_by_env=${encodeURIComponent(env)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`,
       ];
       res.setHeader("Set-Cookie", cookies);
-      // si non autorisé : on renvoie 403 tout de suite
+
       if (!allowed) {
         return res.status(403).json({
           ok: false,
           error: "NOT_WHITELISTED",
-          message: "Ce restaurant n'est pas autorisé à recevoir des commandes de test. Contactez Grégory.",
+          message:
+            "Ce restaurant n'est pas autorisé à recevoir des commandes de test. Contactez Grégory.",
         });
       }
     }
 
-    // Si on arrive ici on renvoie la réponse originale (json déjà lu)
     res.setHeader("Content-Type", "application/json");
     return res.status(upstream.status).json(json ?? { ok: upstream.ok });
   }
 
-  // Réponses standard (autres endpoints)
+  // 5) réponse standard pour les autres endpoints
   res.setHeader("X-Proxy-Target", target);
   const ct = upstream.headers.get("content-type") || "application/json";
   res.setHeader("Content-Type", ct);
@@ -125,7 +157,7 @@ export default async function handler(req, res) {
 function streamToString(req) {
   return new Promise((resolve, reject) => {
     let b = "";
-    req.on("data", (c) => (b += c));
+    req.on("data", c => (b += c));
     req.on("end", () => resolve(b));
     req.on("error", reject);
   });
