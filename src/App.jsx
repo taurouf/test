@@ -99,7 +99,7 @@ async function zfetch(
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey || ""}`,
-      "X-Zelty-Base": baseKey, // >>> important pour faire correspondre l'env côté proxy
+      "X-Zelty-Base": baseKey, // important pour router l'env côté proxy
     },
     body: body ? JSON.stringify(body) : undefined,
   });
@@ -415,7 +415,7 @@ function OrderPage() {
     setModalOpen(true);
   };
 
-  // --- Whitelist (copie UI) ---
+  // --- Whitelist (UI) ---
   const [whitelist, setWhitelist] = useState([]);
   const [keyAllowed, setKeyAllowed] = useState(true);
   const [allowMsg, setAllowMsg] = useState("");
@@ -434,6 +434,7 @@ function OrderPage() {
   /* ——— Catalogues ——— */
   useEffect(() => {
     if (!canCall) return;
+
     (async () => {
       try {
         setStatus("Chargement des catalogues…");
@@ -453,16 +454,53 @@ function OrderPage() {
           setWhitelist([]);
         }
 
-        // 1) Restaurants — puis contrôle whitelist
-        const r = await zfetch(API_BASE, "/restaurants", {
-          apiKey,
-          baseKey: envName,
-        });
-        const rs = r?.restaurants || [];
+        // 1) Restaurants — gestion fine du 403 NOT_WHITELISTED
+        let rs = [];
+        try {
+          const r = await zfetch(API_BASE, "/restaurants", {
+            apiKey,
+            baseKey: envName,
+          });
+          rs = r?.restaurants || [];
+        } catch (err) {
+          const msg = String(err?.message || err || "");
+          // tente d'extraire un JSON final si présent
+          let serverObj = null;
+          const m = msg.match(/\{[\s\S]*\}$/);
+          if (m) {
+            try {
+              serverObj = JSON.parse(m[0]);
+            } catch {}
+          }
+          const isNotWhite =
+            msg.startsWith("403") &&
+            (serverObj?.error === "NOT_WHITELISTED" || msg.includes("NOT_WHITELISTED"));
+
+          if (isNotWhite) {
+            // On affiche un message propre + popup, on masque le catalogue
+            setKeyAllowed(false);
+            setAllowMsg(
+              "⚠️ Ce restaurant n’est pas dans la liste autorisée pour les envois de commandes test. Contactez Grégory."
+            );
+            setStatus("⛔ Restaurant non autorisé — chargement du catalogue annulé.");
+            openModal(
+              "error",
+              "Restaurant non autorisé",
+              <div>
+                Ce restaurant n'est <b>pas autorisé</b> à recevoir des commandes de test.<br />
+                Veuillez contacter <b>Grégory</b>.
+              </div>
+            );
+            return; // 👉 stop ici
+          }
+          // autre erreur → on laisse l'ancienne gestion
+          throw err;
+        }
+
         setRestaurants(rs);
         if (rs.length === 1) setRestaurantId(String(rs[0].id));
 
-        // Règle strict : si whitelist vide -> blocage
+        // Règle strict côté UI : si whitelist vide -> blocage
         let allowed = true;
         if (!ids.length) {
           allowed = false;
@@ -1019,13 +1057,7 @@ function OrderPage() {
 
         {keyAllowed ? (
           <>
-            {/* 3) Panier */}
-            {/* ... (inchangé par rapport à ce qu’on avait, j’ai gardé tout le bloc) */}
-            {/* Pour garder la réponse compacte, je n’ai pas replié ce bloc ici. 
-                => Ce bloc est exactement celui que tu avais : lignes, options, menus, etc. */}
-
-            {/* Pour gagner de la place dans ce message, j’abrège : */}
-            {/* === Début du bloc panier (identique à ta version précédente) === */}
+            {/* 3) Panier – Produits, options & menus */}
             <section className="card p-6">
               <h2 className="section-title">3) Panier – Produits, options guidées & menus</h2>
               <div className="space-y-4">
@@ -1190,7 +1222,6 @@ function OrderPage() {
                 </div>
               </div>
             </section>
-            {/* === Fin du bloc panier === */}
 
             {/* 4) Paiement */}
             <section className="card p-6">
@@ -1256,6 +1287,7 @@ function OrderPage() {
           </section>
         )}
       </main>
+
       <Modal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
