@@ -438,44 +438,31 @@ function OrderPage() {
   useEffect(() => {
     let alive = true;
 
-    // Réinitialise si clé vide / trop courte
+    // Reset si clé vide / trop courte
     if (!canCall) {
       setApiValid(false);
+      setKeyAllowed(true);
+      setRestaurants([]);
+      setRestaurantId("");
       return;
     }
 
     (async () => {
       try {
         setStatus("Vérification de la clé API…");
-        // Appel léger qui échoue si la clé est invalide
-        await zfetch(API_BASE, "/transaction-methods", {
+        // ✅ On valide la clé via /restaurants (source d'autorité et on récupère l'ID resto)
+        const r = await zfetch(API_BASE, "/restaurants", {
           apiKey,
           baseKey: envName,
         });
         if (!alive) return;
+
+        const rs = r?.restaurants || [];
+        setRestaurants(rs);
+        if (rs.length === 1) setRestaurantId(String(rs[0].id));
         setApiValid(true);
-        setStatus("✅ Clé API valide.");
-      } catch (e) {
-        if (!alive) return;
-        setApiValid(false);
-        setStatus("❌ Clé API invalide.");
-      }
-    })();
 
-    return () => {
-      alive = false;
-    };
-  }, [apiKey, envName, canCall]);
-
-  /* ——— Catalogues ——— */
-  useEffect(() => {
-    if (!apiValid) return;
-
-    (async () => {
-      try {
-        setStatus("Chargement des catalogues…");
-
-        // 0) Charger la whitelist de l'env sélectionné (toujours AVANT le reste)
+        // Charge la whitelist pour l'env et vérifie l'autorisation
         let ids = [];
         try {
           const wlRes = await fetch(`/api/admin/whitelist?env=${envName}`, { cache: "no-store" });
@@ -490,71 +477,13 @@ function OrderPage() {
           setWhitelist([]);
         }
 
-        // 1) Restaurants — gestion fine du 403 NOT_WHITELISTED
-        let rs = [];
-        try {
-          const r = await zfetch(API_BASE, "/restaurants", {
-            apiKey,
-            baseKey: envName,
-          });
-          rs = r?.restaurants || [];
-        } catch (err) {
-          const msg = String(err?.message || err || "");
-          // tente d'extraire un JSON final si présent
-          let serverObj = null;
-          const m = msg.match(/\{[\s\S]*\}$/);
-          if (m) {
-            try {
-              serverObj = JSON.parse(m[0]);
-            } catch {}
-          }
-          const isNotWhite =
-            msg.startsWith("403") &&
-            (serverObj?.error === "NOT_WHITELISTED" || msg.includes("NOT_WHITELISTED"));
-
-          if (isNotWhite) {
-            // On affiche un message propre + popup, on masque le catalogue
-            setKeyAllowed(false);
-            setAllowMsg(
-              "⚠️ Ce restaurant n’est pas dans la liste autorisée pour les envois de commandes test. Contactez Grégory."
-            );
-            setStatus("⛔ Restaurant non autorisé — chargement du catalogue annulé.");
-            openModal(
-              "error",
-              "Restaurant non autorisé",
-              <div>
-                Ce restaurant n'est <b>pas autorisé</b> à recevoir des commandes de test.<br />
-                Veuillez contacter <b>Grégory</b>.
-              </div>
-            );
-            return; // 👉 stop ici
-          }
-          // autre erreur → on laisse l'ancienne gestion
-          throw err;
-        }
-
-        setRestaurants(rs);
-        if (rs.length === 1) setRestaurantId(String(rs[0].id));
-
-        // Règle strict côté UI : si whitelist vide -> blocage
-        let allowed = true;
-        if (!ids.length) {
-          allowed = false;
-          setKeyAllowed(false);
-          setAllowMsg("⚠️ Aucun restaurant autorisé pour cet environnement. Contactez Grégory.");
-        } else {
-          const idsFromKey = (rs || []).map((rr) => Number(rr.id));
-          const ok = idsFromKey.some((id) => ids.includes(id));
-          allowed = ok;
-          setKeyAllowed(ok);
+        const idsFromKey = rs.map((rr) => Number(rr.id));
+        const ok = idsFromKey.some((id) => ids.includes(id));
+        setKeyAllowed(ok);
+        if (!ok) {
           setAllowMsg(
-            ok
-              ? ""
-              : "⚠️ Ce restaurant n’est pas dans la liste autorisée pour les envois de commandes test. Contactez Grégory."
+            "⚠️ Ce restaurant n’est pas dans la liste autorisée pour les envois de commandes test. Contactez Grégory."
           );
-        }
-
-        if (!allowed) {
           setStatus("⛔ Restaurant non autorisé — chargement du catalogue annulé.");
           openModal(
             "error",
@@ -564,30 +493,82 @@ function OrderPage() {
               Veuillez contacter <b>Grégory</b>.
             </div>
           );
-          return; // 👉 stop ici, on ne charge PAS le catalogue
+        } else {
+          setAllowMsg("");
+          setStatus("✅ Clé API valide.");
         }
+      } catch (err) {
+        if (!alive) return;
+        const msg = String(err?.message || err || "");
+        let serverObj = null;
+        const m = msg.match(/\{[\s\S]*\}$/);
+        if (m) {
+          try {
+            serverObj = JSON.parse(m[0]);
+          } catch {}
+        }
+        const isNotWhite =
+          msg.startsWith("403") &&
+          (serverObj?.error === "NOT_WHITELISTED" || msg.includes("NOT_WHITELISTED"));
+        if (isNotWhite) {
+          // Clé API valide mais resto non whiteliste
+          setApiValid(true);
+          setKeyAllowed(false);
+          setAllowMsg(
+            "⚠️ Ce restaurant n’est pas dans la liste autorisée pour les envois de commandes test. Contactez Grégory."
+          );
+          setStatus("⛔ Restaurant non autorisé — chargement du catalogue annulé.");
+          openModal(
+            "error",
+            "Restaurant non autorisé",
+            <div>
+              Ce restaurant n'est <b>pas autorisé</b> à recevoir des commandes de test.<br />
+              Veuillez contacter <b>Grégory</b>.
+            </div>
+          );
+        } else {
+          // Mauvaise clé API
+          setApiValid(false);
+          setKeyAllowed(true);
+          setAllowMsg("");
+          setStatus("❌ Clé API invalide.");
+        }
+      }
+    })();
 
-        // 2) Catalogues (uniquement si autorisé)
-        const d = await zfetch(API_BASE, "/catalog/dishes", {
-          apiKey,
-          baseKey: envName,
-          params: { lang: "fr", limit: 2000 },
-        });
-        const m = await zfetch(API_BASE, "/catalog/menus", {
-          apiKey,
-          baseKey: envName,
-          params: { lang: "fr", limit: 1000 },
-        });
-        const o = await zfetch(API_BASE, "/catalog/options", {
-          apiKey,
-          baseKey: envName,
-          params: { lang: "fr", limit: 2000 },
-        });
-        const t = await zfetch(API_BASE, "/transaction-methods", {
-          apiKey,
-          baseKey: envName,
-        });
+    return () => {
+      alive = false;
+    };
+  }, [apiKey, envName, canCall]);
 
+  /* ——— Catalogues ——— */
+  useEffect(() => {
+    if (!apiValid || !keyAllowed) return;
+
+    (async () => {
+      try {
+        setStatus("Chargement des catalogues…");
+        const [d, m, o, t] = await Promise.all([
+          zfetch(API_BASE, "/catalog/dishes", {
+            apiKey,
+            baseKey: envName,
+            params: { lang: "fr", limit: 2000 },
+          }),
+          zfetch(API_BASE, "/catalog/menus", {
+            apiKey,
+            baseKey: envName,
+            params: { lang: "fr", limit: 1000 },
+          }),
+          zfetch(API_BASE, "/catalog/options", {
+            apiKey,
+            baseKey: envName,
+            params: { lang: "fr", limit: 2000 },
+          }),
+          zfetch(API_BASE, "/transaction-methods", {
+            apiKey,
+            baseKey: envName,
+          }),
+        ]);
         setDishes(d?.dishes || []);
         setMenus(m?.menus || []);
         setOptionsList(o?.options || []);
@@ -597,7 +578,7 @@ function OrderPage() {
         setStatus(`❌ ${err.message}`);
       }
     })();
-  }, [apiValid, apiKey, envName]);
+  }, [apiValid, keyAllowed, apiKey, envName]);
 
   // Règle “Agrégateur”
   useEffect(() => {
