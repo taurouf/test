@@ -403,6 +403,9 @@ function OrderPage() {
   const [paymentMethodId, setPaymentMethodId] = useState("");
   const [loading, setLoading] = useState(false);
 
+  // Validation de la clé API
+  const [apiValid, setApiValid] = useState(false);
+
   // Modale globale
   const [modalOpen, setModalOpen] = useState(false);
   const [modalKind, setModalKind] = useState("info");
@@ -431,9 +434,42 @@ function OrderPage() {
 
   const canCall = Boolean(apiKey) && apiKey.length > 8;
 
+  /* ——— Vérification de la clé API ——— */
+  useEffect(() => {
+    let alive = true;
+
+    // Réinitialise si clé vide / trop courte
+    if (!canCall) {
+      setApiValid(false);
+      return;
+    }
+
+    (async () => {
+      try {
+        setStatus("Vérification de la clé API…");
+        // Appel léger qui échoue si la clé est invalide
+        await zfetch(API_BASE, "/transaction-methods", {
+          apiKey,
+          baseKey: envName,
+        });
+        if (!alive) return;
+        setApiValid(true);
+        setStatus("✅ Clé API valide.");
+      } catch (e) {
+        if (!alive) return;
+        setApiValid(false);
+        setStatus("❌ Clé API invalide.");
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [apiKey, envName, canCall]);
+
   /* ——— Catalogues ——— */
   useEffect(() => {
-    if (!canCall) return;
+    if (!apiValid) return;
 
     (async () => {
       try {
@@ -561,7 +597,7 @@ function OrderPage() {
         setStatus(`❌ ${err.message}`);
       }
     })();
-  }, [apiKey, envName, canCall]);
+  }, [apiValid, apiKey, envName]);
 
   // Règle “Agrégateur”
   useEffect(() => {
@@ -862,24 +898,27 @@ function OrderPage() {
                 placeholder="zk_live_***"
               />
             </div>
-            <div>
-              <label className="label">Restaurant (optionnel)</label>
-              <select
-                className="select"
-                value={restaurantId}
-                onChange={(e) => setRestaurantId(e.target.value)}
-              >
-                <option value="">—</option>
-                {restaurants.map((r) => (
-                  <option key={r.id} value={r.id}>{`${r.name} (#${r.id})`}</option>
-                ))}
-              </select>
-              <p className="muted mt-1">Auto-rempli si la clé est mono-site.</p>
-            </div>
+            {apiValid && (
+              <div>
+                <label className="label">Restaurant (optionnel)</label>
+                <select
+                  className="select"
+                  value={restaurantId}
+                  onChange={(e) => setRestaurantId(e.target.value)}
+                >
+                  <option value="">—</option>
+                  {restaurants.map((r) => (
+                    <option key={r.id} value={r.id}>{`${r.name} (#${r.id})`}</option>
+                  ))}
+                </select>
+                <p className="muted mt-1">Auto-rempli si la clé est mono-site.</p>
+              </div>
+            )}
           </div>
         </section>
 
         {/* 2) Infos de commande */}
+        {apiValid && (
         <section className="card p-6">
           <h2 className="section-title">2) Informations de commande</h2>
           <div className="grid gap-6 md:grid-cols-4">
@@ -1035,9 +1074,10 @@ function OrderPage() {
             </div>
           )}
         </section>
+        )}
 
         {/* Adresse livraison */}
-        {mode === "delivery" && (
+        {apiValid && mode === "delivery" && (
           <section className="card p-6">
             <h2 className="section-title">Adresse de livraison</h2>
             <div className="grid gap-4 md:grid-cols-3">
@@ -1055,234 +1095,243 @@ function OrderPage() {
           </section>
         )}
 
-        {keyAllowed ? (
-          <>
-            {/* 3) Panier – Produits, options & menus */}
-            <section className="card p-6">
-              <h2 className="section-title">3) Panier – Produits, options guidées & menus</h2>
-              <div className="space-y-4">
-                {cart.map((line, idx) => {
-                  const setLine = (patch) => setCart((p)=>p.map((l,i)=>i===idx?{...l,...patch}:l));
-                  const lineTitle =
-                    line.type === "menu"
-                      ? findMenu(line.menuId)?.name || `Menu #${line.menuId || "—"}`
-                      : findDish(line.dishId)?.name || `Produit #${line.dishId || "—"}`;
+        {apiValid ? (
+          keyAllowed ? (
+            <>
+              {/* 3) Panier – Produits, options & menus */}
+              <section className="card p-6">
+                <h2 className="section-title">3) Panier – Produits, options guidées &amp; menus</h2>
+                <div className="space-y-4">
+                  {cart.map((line, idx) => {
+                    const setLine = (patch) => setCart((p)=>p.map((l,i)=>i===idx?{...l,...patch}:l));
+                    const lineTitle =
+                      line.type === "menu"
+                        ? findMenu(line.menuId)?.name || `Menu #${line.menuId || "—"}`
+                        : findDish(line.dishId)?.name || `Produit #${line.dishId || "—"}`;
 
-                  return (
-                    <div key={idx} className="rounded-2xl border border-primary/10 bg-white shadow-sm p-4">
-                      <div className="flex items-center justify-between gap-3 mb-3">
-                        <div className="font-semibold text-primary">{lineTitle}</div>
-                        <button className="btn-ghost" onClick={() => setCart((p)=>p.filter((_,i)=>i!==idx))}>
-                          Supprimer
-                        </button>
-                      </div>
+                    return (
+                      <div key={idx} className="rounded-2xl border border-primary/10 bg-white shadow-sm p-4">
+                        <div className="flex items-center justify-between gap-3 mb-3">
+                          <div className="font-semibold text-primary">{lineTitle}</div>
+                          <button className="btn-ghost" onClick={() => setCart((p)=>p.filter((_,i)=>i!==idx))}>
+                            Supprimer
+                          </button>
+                        </div>
 
-                      <div className="grid gap-4 md:grid-cols-4">
-                        <div>
-                          <label className="label">Type</label>
-                          <select className="select" value={line.type} onChange={(e)=>setLine({type:e.target.value})}>
-                            <option value="dish">Plat</option>
-                            <option value="menu">Menu</option>
-                          </select>
-                        </div>
-                        <div>
-                          <label className="label">Quantité</label>
-                          <input className="input" type="number" min="1" value={line.quantity}
-                            onChange={(e)=>setLine({quantity: Math.max(1, Number(e.target.value||1))})}/>
-                        </div>
-                        <div className="md:col-span-2">
-                          <label className="label">{line.type==="menu"?"Menu":"Plat"}</label>
-                          {line.type==="menu"?(
-                            <select className="select" value={line.menuId}
-                              onChange={(e)=>setLine({menuId:e.target.value, menuChoices:{}})}>
-                              <option value="">—</option>
-                              {menus.map((m)=>(<option key={m.id} value={m.id}>{`${m.name} (#${m.id})`}</option>))}
+                        <div className="grid gap-4 md:grid-cols-4">
+                          <div>
+                            <label className="label">Type</label>
+                            <select className="select" value={line.type} onChange={(e)=>setLine({type:e.target.value})}>
+                              <option value="dish">Plat</option>
+                              <option value="menu">Menu</option>
                             </select>
-                          ):(
-                            <select className="select" value={line.dishId}
-                              onChange={(e)=>setLine({dishId:e.target.value, optionSelections:{}})}>
-                              <option value="">—</option>
-                              {dishes.map((d)=>(<option key={d.id} value={d.id}>{`${d.name} (#${d.id})`}</option>))}
-                            </select>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Options pour plat */}
-                      {line.type==="dish" && line.dishId && (
-                        <details className="mt-4 rounded-xl border border-primary/10 px-4 py-3">
-                          <summary className="font-medium">Options</summary>
-                          <div className="mt-3 flex flex-wrap gap-3">
-                            {(optionsList||[])
-                              .filter((o)=>(findDish(line.dishId)?.options||[]).includes(o.id))
-                              .map((opt)=>{
-                                const isMulti = Boolean(opt.multi);
-                                const current = Array.isArray(line.optionSelections?.[opt.id])
-                                  ? line.optionSelections[opt.id]
-                                  : line.optionSelections?.[opt.id] ? [line.optionSelections[opt.id]] : [];
-                                return (
-                                  <details key={opt.id} className="rounded-xl border border-primary/10 p-3">
-                                    <summary className="text-sm">{`${opt.name} (#${opt.id})${current.length?` — ${current.length}`:""}`}</summary>
-                                    <div className="mt-2 flex flex-wrap gap-2">
-                                      {(opt.values||[]).map((v)=>{
-                                        const checked = current.includes(String(v.id));
-                                        return (
-                                          <label key={v.id} className="chip">
-                                            <input type="checkbox" checked={checked}
-                                              onChange={(e)=>{
-                                                const now = Array.isArray(line.optionSelections?.[opt.id]) ? line.optionSelections[opt.id] : [];
-                                                const next = e.target.checked
-                                                  ? (isMulti?[...now,String(v.id)]:[String(v.id)])
-                                                  : now.filter((x)=>x!==String(v.id));
-                                                setCart((prev)=>prev.map((l,i)=>i===idx?{
-                                                  ...l, optionSelections:{...(l.optionSelections||{}),[opt.id]:next}
-                                                }:l));
-                                              }}/>
-                                            {v.name}{v.price?`(+${(v.price/100).toFixed(2)}€)`:""}
-                                          </label>
-                                        );
-                                      })}
-                                    </div>
-                                  </details>
-                                );
-                              })}
                           </div>
-                        </details>
-                      )}
+                          <div>
+                            <label className="label">Quantité</label>
+                            <input className="input" type="number" min="1" value={line.quantity}
+                              onChange={(e)=>setLine({quantity: Math.max(1, Number(e.target.value||1))})}/>
+                          </div>
+                          <div className="md:col-span-2">
+                            <label className="label">{line.type==="menu"?"Menu":"Plat"}</label>
+                            {line.type==="menu"?(
+                              <select className="select" value={line.menuId}
+                                onChange={(e)=>setLine({menuId:e.target.value, menuChoices:{}})}>
+                                <option value="">—</option>
+                                {menus.map((m)=>(<option key={m.id} value={m.id}>{`${m.name} (#${m.id})`}</option>))}
+                              </select>
+                            ):(
+                              <select className="select" value={line.dishId}
+                                onChange={(e)=>setLine({dishId:e.target.value, optionSelections:{}})}>
+                                <option value="">—</option>
+                                {dishes.map((d)=>(<option key={d.id} value={d.id}>{`${d.name} (#${d.id})`}</option>))}
+                              </select>
+                            )}
+                          </div>
+                        </div>
 
-                      {/* Choix menu */}
-                      {line.type==="menu" && line.menuId && (
-                        <div className="mt-4 space-y-3">
-                          {(findMenu(line.menuId)?.parts||[]).map((p)=>{
-                            const choice = line.menuChoices?.[p.id] || {};
-                            const setChoice = (patch)=>setCart((prev)=>prev.map((l,i)=>i===idx?{
-                              ...l, menuChoices:{...(l.menuChoices||{}), [p.id]:{...(l.menuChoices?.[p.id]||{}),...patch}}
-                            }:l));
-
-                            return (
-                              <div key={p.id} className="rounded-2xl border border-primary/10 p-3">
-                                <div className="font-medium">{p.name} (part #{p.id})</div>
-                                <div className="mt-2">
-                                  <label className="label">Choix</label>
-                                  <select className="select" value={choice.dishId||""}
-                                    onChange={(e)=>setChoice({dishId:e.target.value, optionSelections:{}})}>
-                                    <option value="">—</option>
-                                    {(p.dishes||[]).map((dId)=>{
-                                      const d = findDish(dId);
-                                      return <option key={dId} value={dId}>{d?`${d.name} (#${d.id})`:`Plat #${dId}`}</option>;
-                                    })}
-                                  </select>
-                                </div>
-
-                                {choice.dishId && (
-                                  <details className="mt-3 rounded-xl border border-primary/10 px-3 py-2">
-                                    <summary className="text-sm">Options</summary>
-                                    <div className="mt-2 flex flex-wrap gap-2">
-                                      {(optionsList||[])
-                                        .filter((o)=>(findDish(choice.dishId)?.options||[]).includes(o.id))
-                                        .map((opt)=>{
-                                          const current = Array.isArray(choice.optionSelections?.[opt.id]) ? choice.optionSelections[opt.id] : [];
+                        {/* Options pour plat */}
+                        {line.type==="dish" && line.dishId && (
+                          <details className="mt-4 rounded-xl border border-primary/10 px-4 py-3">
+                            <summary className="font-medium">Options</summary>
+                            <div className="mt-3 flex flex-wrap gap-3">
+                              {(optionsList||[])
+                                .filter((o)=>(findDish(line.dishId)?.options||[]).includes(o.id))
+                                .map((opt)=>{
+                                  const isMulti = Boolean(opt.multi);
+                                  const current = Array.isArray(line.optionSelections?.[opt.id])
+                                    ? line.optionSelections[opt.id]
+                                    : line.optionSelections?.[opt.id] ? [line.optionSelections[opt.id]] : [];
+                                  return (
+                                    <details key={opt.id} className="rounded-xl border border-primary/10 p-3">
+                                      <summary className="text-sm">{`${opt.name} (#${opt.id})${current.length?` — ${current.length}`:""}`}</summary>
+                                      <div className="mt-2 flex flex-wrap gap-2">
+                                        {(opt.values||[]).map((v)=>{
+                                          const checked = current.includes(String(v.id));
                                           return (
-                                            <details key={opt.id} className="rounded-2xl border border-primary/10 p-3">
-                                              <summary className="text-sm">{`${opt.name} (#${opt.id})${current.length?` — ${current.length}`:""}`}</summary>
-                                              <div className="mt-2 flex flex-wrap gap-2">
-                                                {(opt.values||[]).map((v)=>{
-                                                  const checked = current.includes(String(v.id));
-                                                  return (
-                                                    <label key={v.id} className="chip">
-                                                      <input type="checkbox" checked={checked}
-                                                        onChange={(e)=>{
-                                                          const now = Array.isArray(choice.optionSelections?.[opt.id]) ? choice.optionSelections[opt.id] : [];
-                                                          const next = e.target.checked ? [...now,String(v.id)] : now.filter((x)=>x!==String(v.id));
-                                                          setChoice({ optionSelections:{...(choice.optionSelections||{}), [opt.id]:next} });
-                                                        }}/>
-                                                      {v.name}{v.price?`(+${(v.price/100).toFixed(2)}€)`:""}
-                                                    </label>
-                                                  );
-                                                })}
-                                              </div>
-                                            </details>
+                                            <label key={v.id} className="chip">
+                                              <input type="checkbox" checked={checked}
+                                                onChange={(e)=>{
+                                                  const now = Array.isArray(line.optionSelections?.[opt.id]) ? line.optionSelections[opt.id] : [];
+                                                  const next = e.target.checked
+                                                    ? (isMulti?[...now,String(v.id)]:[String(v.id)])
+                                                    : now.filter((x)=>x!==String(v.id));
+                                                  setCart((prev)=>prev.map((l,i)=>i===idx?{
+                                                    ...l, optionSelections:{...(l.optionSelections||{}),[opt.id]:next}
+                                                  }:l));
+                                                }}/>
+                                              {v.name}{v.price?`(+${(v.price/100).toFixed(2)}€)`:""}
+                                            </label>
                                           );
                                         })}
-                                    </div>
-                                  </details>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+                                      </div>
+                                    </details>
+                                  );
+                                })}
+                            </div>
+                          </details>
+                        )}
 
-                <div className="flex flex-wrap gap-3">
-                  <button className="btn-accent" onClick={addDishLine}>+ Ajouter un plat</button>
-                  <button className="btn-accent" onClick={addMenuLine}>+ Ajouter un menu</button>
-                </div>
-              </div>
-            </section>
+                        {/* Choix menu */}
+                        {line.type==="menu" && line.menuId && (
+                          <div className="mt-4 space-y-3">
+                            {(findMenu(line.menuId)?.parts||[]).map((p)=>{
+                              const choice = line.menuChoices?.[p.id] || {};
+                              const setChoice = (patch)=>setCart((prev)=>prev.map((l,i)=>i===idx?{
+                                ...l, menuChoices:{...(l.menuChoices||{}), [p.id]:{...(l.menuChoices?.[p.id]||{}),...patch}}
+                              }:l));
 
-            {/* 4) Paiement */}
-            <section className="card p-6">
-              <h2 className="section-title">4) Paiement</h2>
-              <div className="grid gap-6 md:grid-cols-4">
-                <div className="flex items-end gap-3">
-                  <input
-                    id="paid"
-                    type="checkbox"
-                    className="h-5 w-5 accent-success"
-                    checked={paid}
-                    onChange={(e) => setPaid(e.target.checked)}
-                  />
-                  <label htmlFor="paid" className="label !mb-0">
-                    Commande payée ?
-                  </label>
-                </div>
-                {paid && (
-                  <div className="md:col-span-2">
-                    <label className="label">Méthode de paiement</label>
-                    <select
-                      className="select"
-                      value={paymentMethodId}
-                      onChange={(e) => setPaymentMethodId(e.target.value)}
-                    >
-                      <option value="">—</option>
-                      {txnMethods.map((m) => (
-                        <option key={m.id} value={m.id}>{`${m.name} (#${m.id})`}</option>
-                      ))}
-                    </select>
+                              return (
+                                <div key={p.id} className="rounded-2xl border border-primary/10 p-3">
+                                  <div className="font-medium">{p.name} (part #{p.id})</div>
+                                  <div className="mt-2">
+                                    <label className="label">Choix</label>
+                                    <select className="select" value={choice.dishId||""}
+                                      onChange={(e)=>setChoice({dishId:e.target.value, optionSelections:{}})}>
+                                      <option value="">—</option>
+                                      {(p.dishes||[]).map((dId)=>{
+                                        const d = findDish(dId);
+                                        return <option key={dId} value={dId}>{d?`${d.name} (#${d.id})`:`Plat #${dId}`}</option>;
+                                      })}
+                                    </select>
+                                  </div>
+
+                                  {choice.dishId && (
+                                    <details className="mt-3 rounded-xl border border-primary/10 px-3 py-2">
+                                      <summary className="text-sm">Options</summary>
+                                      <div className="mt-2 flex flex-wrap gap-2">
+                                        {(optionsList||[])
+                                          .filter((o)=>(findDish(choice.dishId)?.options||[]).includes(o.id))
+                                          .map((opt)=>{
+                                            const current = Array.isArray(choice.optionSelections?.[opt.id]) ? choice.optionSelections[opt.id] : [];
+                                            return (
+                                              <details key={opt.id} className="rounded-2xl border border-primary/10 p-3">
+                                                <summary className="text-sm">{`${opt.name} (#${opt.id})${current.length?` — ${current.length}`:""}`}</summary>
+                                                <div className="mt-2 flex flex-wrap gap-2">
+                                                  {(opt.values||[]).map((v)=>{
+                                                    const checked = current.includes(String(v.id));
+                                                    return (
+                                                      <label key={v.id} className="chip">
+                                                        <input type="checkbox" checked={checked}
+                                                          onChange={(e)=>{
+                                                            const now = Array.isArray(choice.optionSelections?.[opt.id]) ? choice.optionSelections[opt.id] : [];
+                                                            const next = e.target.checked ? [...now,String(v.id)] : now.filter((x)=>x!==String(v.id));
+                                                            setChoice({ optionSelections:{...(choice.optionSelections||{}), [opt.id]:next} });
+                                                          }}/>
+                                                        {v.name}{v.price?`(+${(v.price/100).toFixed(2)}€)`:""}
+                                                      </label>
+                                                    );
+                                                  })}
+                                                </div>
+                                              </details>
+                                            );
+                                          })}
+                                      </div>
+                                    </details>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+
+                  <div className="flex flex-wrap gap-3">
+                    <button className="btn-accent" onClick={addDishLine}>+ Ajouter un plat</button>
+                    <button className="btn-accent" onClick={addMenuLine}>+ Ajouter un menu</button>
                   </div>
-                )}
-                <div className="md:col-span-1 flex items-end gap-3">
-                  <button type="button" className="btn-ghost" onClick={() => console.log("DEBUG payload:", payload)}>
-                    🧪 Debug console
-                  </button>
-                  <button
-                    type="button"
-                    className={`btn-success ${!keyAllowed ? "opacity-60 cursor-not-allowed" : ""}`}
-                    disabled={loading || !canCall || !keyAllowed}
-                    title={!keyAllowed ? "Restaurant non autorisé (whitelist)." : ""}
-                    onClick={createOrder}
-                  >
-                    {loading ? "Création…" : "🧾 Créer la commande"}
-                  </button>
                 </div>
-              </div>
+              </section>
 
-              <details className="mt-4">
-                <summary>Payload (temps réel)</summary>
-                <pre className="mt-2 max-h-96 overflow-auto rounded-xl bg-slate-900 p-4 text-slate-100 text-xs">
-{JSON.stringify(payload, null, 2)}
-                </pre>
-              </details>
+              {/* 4) Paiement */}
+              <section className="card p-6">
+                <h2 className="section-title">4) Paiement</h2>
+                <div className="grid gap-6 md:grid-cols-4">
+                  <div className="flex items-end gap-3">
+                    <input
+                      id="paid"
+                      type="checkbox"
+                      className="h-5 w-5 accent-success"
+                      checked={paid}
+                      onChange={(e) => setPaid(e.target.checked)}
+                    />
+                    <label htmlFor="paid" className="label !mb-0">
+                      Commande payée ?
+                    </label>
+                  </div>
+                  {paid && (
+                    <div className="md:col-span-2">
+                      <label className="label">Méthode de paiement</label>
+                      <select
+                        className="select"
+                        value={paymentMethodId}
+                        onChange={(e) => setPaymentMethodId(e.target.value)}
+                      >
+                        <option value="">—</option>
+                        {txnMethods.map((m) => (
+                          <option key={m.id} value={m.id}>{`${m.name} (#${m.id})`}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  <div className="md:col-span-1 flex items-end gap-3">
+                    <button type="button" className="btn-ghost" onClick={() => console.log("DEBUG payload:", payload)}>
+                      🧪 Debug console
+                    </button>
+                    <button
+                      type="button"
+                      className={`btn-success ${!keyAllowed ? "opacity-60 cursor-not-allowed" : ""}`}
+                      disabled={loading || !canCall || !keyAllowed}
+                      title={!keyAllowed ? "Restaurant non autorisé (whitelist)." : ""}
+                      onClick={createOrder}
+                    >
+                      {loading ? "Création…" : "🧾 Créer la commande"}
+                    </button>
+                  </div>
+                </div>
+
+                <details className="mt-4">
+                  <summary>Payload (temps réel)</summary>
+                  <pre className="mt-2 max-h-96 overflow-auto rounded-xl bg-slate-900 p-4 text-slate-100 text-xs">
+  {JSON.stringify(payload, null, 2)}
+                  </pre>
+                </details>
+              </section>
+            </>
+          ) : (
+            <section className="card p-6 border-dashed">
+              <h2 className="section-title">Catalogue masqué</h2>
+              <p className="mt-1 text-slate-600">
+                Le catalogue, le panier et le paiement sont accessibles une fois le restaurant <b>whitelisté</b>.
+              </p>
             </section>
-          </>
+          )
         ) : (
           <section className="card p-6 border-dashed">
-            <h2 className="section-title">Catalogue masqué</h2>
+            <h2 className="section-title">Clé API requise</h2>
             <p className="mt-1 text-slate-600">
-              Le catalogue, le panier et le paiement sont accessibles une fois le restaurant <b>whitelisté</b>.
+              Saisis une <b>clé API valide</b> pour afficher le catalogue, le panier et le paiement.
             </p>
           </section>
         )}
