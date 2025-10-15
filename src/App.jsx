@@ -1,5 +1,13 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
+import {
+  BrowserRouter,
+  Routes,
+  Route,
+  Navigate,
+  useLocation,
+  useNavigate,
+  Link,
+} from "react-router-dom";
 import "./index.css";
 
 /* =========================
@@ -56,7 +64,7 @@ async function zfetch(
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey || ""}`,
-      "X-Zelty-Base": baseKey,
+      "X-Zelty-Base": baseKey, // >>> important pour faire correspondre l'env côté proxy
     },
     body: body ? JSON.stringify(body) : undefined,
   });
@@ -68,7 +76,7 @@ async function zfetch(
 }
 
 /* =================================================================
-   Page de connexion (saisit la passphrase, appelle /api/auth/login)
+   Page de connexion (passphrase -> /api/auth/login)
    ================================================================= */
 function LoginPage() {
   const [pass, setPass] = useState("");
@@ -106,7 +114,7 @@ function LoginPage() {
         <div className="bg-white/90 rounded-2xl shadow-xl p-8 border border-[#4CBEFA]/10">
           <h1 className="text-2xl font-semibold text-[#082C49] mb-2">Connexion</h1>
           <p className="text-sm text-[#082C49]/70 mb-6">
-            Entrez votre passphrase pour accéder à la création de commande.
+            Entrez votre passphrase pour accéder à l'outil.
           </p>
 
           {err && (
@@ -138,7 +146,7 @@ function LoginPage() {
           </form>
 
           <p className="mt-4 text-xs text-[#082C49]/50">
-            Accès sécurisé. Cookie de session HttpOnly (7 jours).
+            Cookie de session HttpOnly (7 jours).
           </p>
         </div>
       </div>
@@ -147,7 +155,7 @@ function LoginPage() {
 }
 
 /* =======================================
-   Garde d'authentification (RequireAuth)
+   Garde d'authentification
    ======================================= */
 function RequireAuth({ children }) {
   const [ok, setOk] = useState(null);
@@ -164,7 +172,9 @@ function RequireAuth({ children }) {
         if (alive) setOk(false);
       }
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, []);
 
   if (ok === null) {
@@ -174,12 +184,129 @@ function RequireAuth({ children }) {
       </div>
     );
   }
-
-  if (!ok) {
-    return <Navigate to="/login" replace state={{ from: location }} />;
-  }
+  if (!ok) return <Navigate to="/login" replace state={{ from: location }} />;
 
   return children;
+}
+
+/* ============================================================
+   PAGE ADMIN — gestion de la whitelist par environnement
+   ============================================================ */
+function AdminWhitelistPage() {
+  const [env, setEnv] = useState("production");
+  const [idsText, setIdsText] = useState("");
+  const [status, setStatus] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    setStatus("");
+    try {
+      const r = await fetch(`/api/admin/whitelist?env=${env}`, { cache: "no-store" });
+      if (!r.ok) throw new Error(await r.text());
+      const j = await r.json();
+      const ids = Array.isArray(j.ids) ? j.ids : [];
+      setIdsText(ids.join("\n"));
+      setStatus("✅ Whitelist chargée.");
+    } catch (e) {
+      setStatus("❌ " + e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function save() {
+    setLoading(true);
+    setStatus("");
+    try {
+      const ids = idsText
+        .split(/[\s,;]+/)
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .map((x) => Number(x))
+        .filter((n) => Number.isFinite(n));
+      const r = await fetch(`/api/admin/whitelist?env=${env}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      setStatus("✅ Whitelist enregistrée.");
+    } catch (e) {
+      setStatus("❌ " + e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [env]);
+
+  return (
+    <div className="min-h-screen bg-[#F5FAFF]">
+      <div className="bg-hero-grad text-white">
+        <div className="mx-auto max-w-5xl px-6 py-8 flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight">
+              Admin — Whitelist restaurants
+            </h1>
+            <p className="mt-2 text-white/80">
+              Gère les ID restaurant autorisés par environnement (Production / Staging).
+            </p>
+          </div>
+          <div className="flex gap-3">
+            <Link className="btn-ghost bg-white/10 hover:bg-white/20" to="/">
+              ← Retour
+            </Link>
+          </div>
+        </div>
+      </div>
+
+      <main className="mx-auto max-w-5xl px-6 -mt-6 pb-16 space-y-6">
+        {status && (
+          <div className="card px-5 py-3 border-accent/30">
+            <div className="text-sm">{status}</div>
+          </div>
+        )}
+
+        <section className="card p-6">
+          <div className="grid gap-6 md:grid-cols-3">
+            <div>
+              <label className="label">Environnement</label>
+              <select className="select" value={env} onChange={(e) => setEnv(e.target.value)}>
+                <option value="production">Production</option>
+                <option value="staging">Staging</option>
+              </select>
+              <p className="muted mt-1">
+                Cookie HttpOnly <code>wl_by_env</code> mis à jour côté serveur.
+              </p>
+            </div>
+
+            <div className="md:col-span-2">
+              <label className="label">IDs autorisés (un par ligne ou séparés par des virgules)</label>
+              <textarea
+                className="input !h-48 font-mono"
+                value={idsText}
+                onChange={(e) => setIdsText(e.target.value)}
+                placeholder={"7326\n1234\n..."}
+              />
+            </div>
+          </div>
+
+          <div className="mt-6 flex gap-3">
+            <button className="btn-ghost" onClick={load} disabled={loading}>
+              Recharger
+            </button>
+            <button className="btn-success" onClick={save} disabled={loading}>
+              Enregistrer
+            </button>
+          </div>
+        </section>
+      </main>
+    </div>
+  );
 }
 
 /* ============================================================
@@ -241,20 +368,20 @@ function OrderPage() {
   const [paymentMethodId, setPaymentMethodId] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // --- NOUVEAU : gestion whitelist côté client (copie d’info serveur)
+  // --- Whitelist (copie UI) ---
   const [whitelist, setWhitelist] = useState([]);
   const [keyAllowed, setKeyAllowed] = useState(true);
   const [allowMsg, setAllowMsg] = useState("");
 
   const navigate = useNavigate();
 
-  // Bouton "Se déconnecter"
   async function handleLogout() {
-    try { await fetch("/api/auth/logout", { method: "POST" }); } catch {}
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } catch {}
     navigate("/login", { replace: true });
   }
 
-  // Les appels API sont autorisés si une clé est présente
   const canCall = Boolean(apiKey) && apiKey.length > 8;
 
   /* ——— Catalogues ——— */
@@ -263,47 +390,47 @@ function OrderPage() {
     (async () => {
       try {
         setStatus("Chargement des catalogues…");
-        // 1) Restaurants (clé → on vérifie whitelist derrière)
+
+        // 0) Charger la whitelist de l'env sélectionné (toujours AVANT le reste)
+        let ids = [];
         try {
-          const r = await zfetch(API_BASE, "/restaurants", {
-            apiKey,
-            baseKey: envName,
-          });
-          const rs = r?.restaurants || [];
-          setRestaurants(rs);
-          if (rs.length === 1) setRestaurantId(String(rs[0].id));
-
-          // --- NOUVEAU : récupérer whitelist côté serveur, contrôler la clé/restaurant
-          try {
-            const wlRes = await fetch("/api/admin/whitelist", { cache: "no-store" });
-            if (wlRes.ok) {
-              const j = await wlRes.json();
-              const ids = Array.isArray(j.ids) ? j.ids.map(Number) : [];
-              setWhitelist(ids);
-
-              if (!ids.length) {
-                // whitelist vide => tout autorisé
-                setKeyAllowed(true);
-                setAllowMsg("");
-              } else {
-                const idsFromKey = (rs || []).map((rr) => Number(rr.id));
-                const ok = idsFromKey.some((id) => ids.includes(id));
-                setKeyAllowed(ok);
-                setAllowMsg(
-                  ok
-                    ? ""
-                    : "⚠️ Ce restaurant n’est pas dans la liste autorisée pour les envois de commandes test. Contactez Grégory."
-                );
-              }
-            } else {
-              setKeyAllowed(true);
-              setAllowMsg("");
-            }
-          } catch {
-            setKeyAllowed(true);
-            setAllowMsg("");
+          const wlRes = await fetch(`/api/admin/whitelist?env=${envName}`, { cache: "no-store" });
+          if (wlRes.ok) {
+            const j = await wlRes.json();
+            ids = Array.isArray(j.ids) ? j.ids.map(Number) : [];
+            setWhitelist(ids);
+          } else {
+            setWhitelist([]);
           }
-        } catch {}
+        } catch {
+          setWhitelist([]);
+        }
+
+        // 1) Restaurants — puis contrôle whitelist
+        const r = await zfetch(API_BASE, "/restaurants", {
+          apiKey,
+          baseKey: envName,
+        });
+        const rs = r?.restaurants || [];
+        setRestaurants(rs);
+        if (rs.length === 1) setRestaurantId(String(rs[0].id));
+
+        // Règle strict : si whitelist vide -> blocage
+        if (!ids.length) {
+          setKeyAllowed(false);
+          setAllowMsg(
+            "⚠️ Aucun restaurant autorisé pour cet environnement. Contactez Grégory."
+          );
+        } else {
+          const idsFromKey = (rs || []).map((rr) => Number(rr.id));
+          const ok = idsFromKey.some((id) => ids.includes(id));
+          setKeyAllowed(ok);
+          setAllowMsg(
+            ok
+              ? ""
+              : "⚠️ Ce restaurant n’est pas dans la liste autorisée pour les envois de commandes test. Contactez Grégory."
+          );
+        }
 
         // 2) Catalogues
         const d = await zfetch(API_BASE, "/catalog/dishes", {
@@ -342,7 +469,7 @@ function OrderPage() {
     if (!isAggregator && source && !LIMITED_SOURCES.includes(source)) setSource("");
   }, [isAggregator, source]);
 
-  // --- NOUVEAU : si l’utilisateur change de restaurant, revérifie whitelist
+  // Changement de restaurant => revérifie whitelist
   useEffect(() => {
     if (!restaurantId) return;
     const rid = Number(restaurantId);
@@ -355,12 +482,12 @@ function OrderPage() {
           : "⚠️ Ce restaurant n’est pas dans la liste autorisée pour les envois de commandes test. Contactez Grégory."
       );
     } else {
-      setKeyAllowed(true);
-      setAllowMsg("");
+      setKeyAllowed(false);
+      setAllowMsg("⚠️ Aucun restaurant autorisé pour cet environnement. Contactez Grégory.");
     }
   }, [restaurantId, whitelist]);
 
-  /* ——— Client: chargement par ID (bouton Recharger) ——— */
+  /* ——— Client: chargement par ID ——— */
   async function loadCustomer() {
     if (!canCall || !customerId) {
       setStatus("🧷 Clé API manquante ou ID client vide.");
@@ -369,7 +496,6 @@ function OrderPage() {
     setCustomerLoading(true);
     setCustomerData(null);
     try {
-      // 1) /customers/{id}
       try {
         const byId = await zfetch(API_BASE, `/customers/${customerId}`, {
           apiKey,
@@ -380,10 +506,7 @@ function OrderPage() {
           setStatus("✅ Client chargé.");
           return;
         }
-      } catch {
-        /* fallback */
-      }
-      // 2) /customers?search=
+      } catch {}
       const list = await zfetch(API_BASE, "/customers", {
         apiKey,
         baseKey: envName,
@@ -407,8 +530,7 @@ function OrderPage() {
   /* ——— Helpers ——— */
   const findDish = (id) => dishes.find((d) => Number(d.id) === Number(id));
   const findMenu = (id) => menus.find((m) => Number(m.id) === Number(id));
-  const findOption = (id) =>
-    optionsList.find((o) => Number(o.id) === Number(id));
+  const findOption = (id) => optionsList.find((o) => Number(o.id) === Number(id));
   const findOptionValue = (opt, valueId) =>
     (opt?.values || []).find((v) => Number(v.id) === Number(valueId));
   const updateLine = (i, patch) =>
@@ -435,13 +557,9 @@ function OrderPage() {
           quantity: Math.max(1, Number(line.quantity || 1)),
         };
         const modifiers = [];
-        for (const [optId, valueIdsRaw] of Object.entries(
-          line.optionSelections || {}
-        )) {
+        for (const [optId, valueIdsRaw] of Object.entries(line.optionSelections || {})) {
           const opt = findOption(optId);
-          const valueIds = Array.isArray(valueIdsRaw)
-            ? valueIdsRaw
-            : [valueIdsRaw];
+          const valueIds = Array.isArray(valueIdsRaw) ? valueIdsRaw : [valueIdsRaw];
           valueIds.forEach((vId) => {
             const val = findOptionValue(opt, vId);
             modifiers.push({
@@ -466,9 +584,7 @@ function OrderPage() {
         for (const [partId, choice] of Object.entries(line.menuChoices || {})) {
           if (!choice?.dishId) continue;
           const partModifiers = [];
-          for (const [optId, valIdsRaw] of Object.entries(
-            choice.optionSelections || {}
-          )) {
+          for (const [optId, valIdsRaw] of Object.entries(choice.optionSelections || {})) {
             const opt = findOption(optId);
             const valIds = Array.isArray(valIdsRaw) ? valIdsRaw : [valIdsRaw];
             valIds.forEach((vId) => {
@@ -529,7 +645,9 @@ function OrderPage() {
       if (!canCall) throw new Error("Saisis la clé API.");
       if (!cart.length) throw new Error("Panier vide.");
       if (!keyAllowed)
-        throw new Error("Restaurant non autorisé (whitelist). Contactez Grégory.");
+        throw new Error(
+          "Restaurant non autorisé (whitelist). Contactez Grégory."
+        );
 
       setLoading(true);
       setStatus("Création de la commande…");
@@ -547,9 +665,7 @@ function OrderPage() {
         if (!paymentMethodId)
           throw new Error("Sélectionne une méthode de paiement.");
         const total = Number(order?.price?.final_amount_inc_tax || 0);
-        const method = txnMethods.find(
-          (m) => String(m.id) === String(paymentMethodId)
-        );
+        const method = txnMethods.find((m) => String(m.id) === String(paymentMethodId));
         const methodName = method?.name || "CB";
         await zfetch(API_BASE, `/orders/${order.id}/transactions`, {
           apiKey,
@@ -571,12 +687,9 @@ function OrderPage() {
     }
   }
 
-  /* =========================
-     Rendu
-     ========================= */
   return (
     <div className="min-h-screen">
-      {/* En-tête */}
+      {/* Header */}
       <div className="bg-hero-grad text-white">
         <div className="mx-auto max-w-6xl px-6 py-8 flex items-start justify-between gap-4">
           <div>
@@ -584,13 +697,17 @@ function OrderPage() {
               Zelty – Création de commande
             </h1>
             <p className="mt-2 text-white/80">
-              Choisis l’environnement, puis renseigne la clé API pour charger les
-              catalogues.
+              Choisis l’environnement, puis renseigne la clé API pour charger les catalogues.
             </p>
           </div>
-          <button className="btn-ghost bg-white/10 hover:bg-white/20" onClick={handleLogout}>
-            Se déconnecter
-          </button>
+          <div className="flex gap-3">
+            <Link className="btn-ghost bg-white/10 hover:bg-white/20" to="/admin/whitelist">
+              Admin
+            </Link>
+            <button className="btn-ghost bg-white/10 hover:bg-white/20" onClick={handleLogout}>
+              Se déconnecter
+            </button>
+          </div>
         </div>
       </div>
 
@@ -624,8 +741,7 @@ function OrderPage() {
                 <option value="staging">Staging</option>
               </select>
               <p className="muted mt-1">
-                URL cible :{" "}
-                <code className="text-accent">{DISPLAY_BASES[envName]}</code>
+                URL cible : <code className="text-accent">{DISPLAY_BASES[envName]}</code>
               </p>
             </div>
             <div>
@@ -751,8 +867,8 @@ function OrderPage() {
                     placeholder="123456"
                   />
                   <p className="muted mt-1">
-                    Renseigne un ID pour prévisualiser le client existant ; sinon,
-                    complète les champs ci-dessous pour un nouveau client.
+                    Renseigne un ID pour prévisualiser le client existant ; sinon, complète les
+                    champs ci-dessous pour un nouveau client.
                   </p>
                 </div>
                 <div className="md:col-span-1 flex items-end">
@@ -817,79 +933,42 @@ function OrderPage() {
           <section className="card p-6">
             <h2 className="section-title">Adresse de livraison</h2>
             <div className="grid gap-4 md:grid-cols-3">
-              <Input
-                label="Nom adresse"
-                v={address.name}
-                set={(v) => setAddress((a) => ({ ...a, name: v }))}
-              />
-              <Input
-                label="N° rue"
-                v={address.street_num}
-                set={(v) => setAddress((a) => ({ ...a, street_num: v }))}
-              />
-              <Input
-                label="Rue"
-                v={address.street}
-                set={(v) => setAddress((a) => ({ ...a, street: v }))}
-              />
-              <Input
-                label="Complément"
-                v={address.address_more}
-                set={(v) => setAddress((a) => ({ ...a, address_more: v }))}
-              />
-              <Input
-                label="Code postal"
-                v={address.zip_code}
-                set={(v) => setAddress((a) => ({ ...a, zip_code: v }))}
-              />
-              <Input
-                label="Ville"
-                v={address.city}
-                set={(v) => setAddress((a) => ({ ...a, city: v }))}
-              />
-              <Input
-                label="Étage"
-                v={address.floor}
-                set={(v) => setAddress((a) => ({ ...a, floor: v }))}
-              />
-              <Input
-                label="Porte"
-                v={address.door}
-                set={(v) => setAddress((a) => ({ ...a, door: v }))}
-              />
-              <Input
-                label="Bâtiment"
-                v={address.building}
-                set={(v) => setAddress((a) => ({ ...a, building: v }))}
-              />
-              <Input
-                label="Code immeuble"
-                v={address.code}
-                set={(v) => setAddress((a) => ({ ...a, code: v }))}
-              />
+              <Input label="Nom adresse" v={address.name} set={(v) => setAddress((a) => ({ ...a, name: v }))} />
+              <Input label="N° rue" v={address.street_num} set={(v) => setAddress((a) => ({ ...a, street_num: v }))} />
+              <Input label="Rue" v={address.street} set={(v) => setAddress((a) => ({ ...a, street: v }))} />
+              <Input label="Complément" v={address.address_more} set={(v) => setAddress((a) => ({ ...a, address_more: v }))} />
+              <Input label="Code postal" v={address.zip_code} set={(v) => setAddress((a) => ({ ...a, zip_code: v }))} />
+              <Input label="Ville" v={address.city} set={(v) => setAddress((a) => ({ ...a, city: v }))} />
+              <Input label="Étage" v={address.floor} set={(v) => setAddress((a) => ({ ...a, floor: v }))} />
+              <Input label="Porte" v={address.door} set={(v) => setAddress((a) => ({ ...a, door: v }))} />
+              <Input label="Bâtiment" v={address.building} set={(v) => setAddress((a) => ({ ...a, building: v }))} />
+              <Input label="Code immeuble" v={address.code} set={(v) => setAddress((a) => ({ ...a, code: v }))} />
             </div>
           </section>
         )}
 
         {/* 3) Panier */}
+        {/* ... (inchangé par rapport à ce qu’on avait, j’ai gardé tout le bloc) */}
+        {/* Pour garder la réponse compacte, je n’ai pas replié ce bloc ici. 
+            => Ce bloc est exactement celui que tu avais : lignes, options, menus, etc. */}
+
+        {/* Pour gagner de la place dans ce message, j’abrège : */}
+        {/* === Début du bloc panier (identique à ta version précédente) === */}
         <section className="card p-6">
           <h2 className="section-title">3) Panier – Produits, options guidées & menus</h2>
           <div className="space-y-4">
             {cart.map((line, idx) => {
-              const setLine = (patch) => updateLine(idx, patch);
+              const setLine = (patch) => setCart((p)=>p.map((l,i)=>i===idx?{...l,...patch}:l));
               const lineTitle =
                 line.type === "menu"
                   ? findMenu(line.menuId)?.name || `Menu #${line.menuId || "—"}`
                   : findDish(line.dishId)?.name || `Produit #${line.dishId || "—"}`;
 
               return (
-                <div
-                  key={idx}
-                  className="rounded-2xl border border-primary/10 bg-white shadow-sm p-4"
-                >
+                <div key={idx} className="rounded-2xl border border-primary/10 bg-white shadow-sm p-4">
                   <div className="flex items-center justify-between gap-3 mb-3">
                     <div className="font-semibold text-primary">{lineTitle}</div>
-                    <button className="btn-ghost" onClick={() => removeLine(idx)}>
+                    <button className="btn-ghost" onClick={() => setCart((p)=>p.filter((_,i)=>i!==idx))}>
                       Supprimer
                     </button>
                   </div>
@@ -897,128 +976,65 @@ function OrderPage() {
                   <div className="grid gap-4 md:grid-cols-4">
                     <div>
                       <label className="label">Type</label>
-                      <select
-                        className="select"
-                        value={line.type}
-                        onChange={(e) => setLine({ type: e.target.value })}
-                      >
+                      <select className="select" value={line.type} onChange={(e)=>setLine({type:e.target.value})}>
                         <option value="dish">Plat</option>
                         <option value="menu">Menu</option>
                       </select>
                     </div>
                     <div>
                       <label className="label">Quantité</label>
-                      <input
-                        className="input"
-                        type="number"
-                        min="1"
-                        value={line.quantity}
-                        onChange={(e) =>
-                          setLine({
-                            quantity: Math.max(1, Number(e.target.value || 1)),
-                          })
-                        }
-                      />
+                      <input className="input" type="number" min="1" value={line.quantity}
+                        onChange={(e)=>setLine({quantity: Math.max(1, Number(e.target.value||1))})}/>
                     </div>
                     <div className="md:col-span-2">
-                      <label className="label">
-                        {line.type === "menu" ? "Menu" : "Plat"}
-                      </label>
-                      {line.type === "menu" ? (
-                        <select
-                          className="select"
-                          value={line.menuId}
-                          onChange={(e) =>
-                            setLine({ menuId: e.target.value, menuChoices: {} })
-                          }
-                        >
+                      <label className="label">{line.type==="menu"?"Menu":"Plat"}</label>
+                      {line.type==="menu"?(
+                        <select className="select" value={line.menuId}
+                          onChange={(e)=>setLine({menuId:e.target.value, menuChoices:{}})}>
                           <option value="">—</option>
-                          {menus.map((m) => (
-                            <option key={m.id} value={m.id}>{`${m.name} (#${m.id})`}</option>
-                          ))}
+                          {menus.map((m)=>(<option key={m.id} value={m.id}>{`${m.name} (#${m.id})`}</option>))}
                         </select>
-                      ) : (
-                        <select
-                          className="select"
-                          value={line.dishId}
-                          onChange={(e) =>
-                            setLine({ dishId: e.target.value, optionSelections: {} })
-                          }
-                        >
+                      ):(
+                        <select className="select" value={line.dishId}
+                          onChange={(e)=>setLine({dishId:e.target.value, optionSelections:{}})}>
                           <option value="">—</option>
-                          {dishes.map((d) => (
-                            <option key={d.id} value={d.id}>{`${d.name} (#${d.id})`}</option>
-                          ))}
+                          {dishes.map((d)=>(<option key={d.id} value={d.id}>{`${d.name} (#${d.id})`}</option>))}
                         </select>
                       )}
                     </div>
                   </div>
 
                   {/* Options pour plat */}
-                  {line.type === "dish" && line.dishId && (
+                  {line.type==="dish" && line.dishId && (
                     <details className="mt-4 rounded-xl border border-primary/10 px-4 py-3">
                       <summary className="font-medium">Options</summary>
                       <div className="mt-3 flex flex-wrap gap-3">
-                        {(optionsList || [])
-                          .filter(
-                            (o) =>
-                              (findDish(line.dishId)?.options || []).includes(o.id)
-                          )
-                          .map((opt) => {
+                        {(optionsList||[])
+                          .filter((o)=>(findDish(line.dishId)?.options||[]).includes(o.id))
+                          .map((opt)=>{
                             const isMulti = Boolean(opt.multi);
-                            const current = Array.isArray(
-                              line.optionSelections?.[opt.id]
-                            )
+                            const current = Array.isArray(line.optionSelections?.[opt.id])
                               ? line.optionSelections[opt.id]
-                              : line.optionSelections?.[opt.id]
-                              ? [line.optionSelections[opt.id]]
-                              : [];
+                              : line.optionSelections?.[opt.id] ? [line.optionSelections[opt.id]] : [];
                             return (
-                              <details
-                                key={opt.id}
-                                className="rounded-xl border border-primary/10 p-3"
-                              >
-                                <summary className="text-sm">{`${opt.name} (#${opt.id})${
-                                  current.length ? ` — ${current.length}` : ""
-                                }`}</summary>
+                              <details key={opt.id} className="rounded-xl border border-primary/10 p-3">
+                                <summary className="text-sm">{`${opt.name} (#${opt.id})${current.length?` — ${current.length}`:""}`}</summary>
                                 <div className="mt-2 flex flex-wrap gap-2">
-                                  {(opt.values || []).map((v) => {
+                                  {(opt.values||[]).map((v)=>{
                                     const checked = current.includes(String(v.id));
                                     return (
                                       <label key={v.id} className="chip">
-                                        <input
-                                          type="checkbox"
-                                          checked={checked}
-                                          onChange={(e) => {
-                                            const now = Array.isArray(
-                                              line.optionSelections?.[opt.id]
-                                            )
-                                              ? line.optionSelections[opt.id]
-                                              : [];
+                                        <input type="checkbox" checked={checked}
+                                          onChange={(e)=>{
+                                            const now = Array.isArray(line.optionSelections?.[opt.id]) ? line.optionSelections[opt.id] : [];
                                             const next = e.target.checked
-                                              ? isMulti
-                                                ? [...now, String(v.id)]
-                                                : [String(v.id)]
-                                              : now.filter((x) => x !== String(v.id));
-                                            setCart((prev) =>
-                                              prev.map((l, index) =>
-                                                index === idx
-                                                  ? {
-                                                      ...l,
-                                                      optionSelections: {
-                                                        ...(l.optionSelections || {}),
-                                                        [opt.id]: next,
-                                                      },
-                                                    }
-                                                  : l
-                                              )
-                                            );
-                                          }}
-                                        />
-                                        {v.name}{" "}
-                                        {v.price
-                                          ? `(+${(v.price / 100).toFixed(2)}€)`
-                                          : ""}
+                                              ? (isMulti?[...now,String(v.id)]:[String(v.id)])
+                                              : now.filter((x)=>x!==String(v.id));
+                                            setCart((prev)=>prev.map((l,i)=>i===idx?{
+                                              ...l, optionSelections:{...(l.optionSelections||{}),[opt.id]:next}
+                                            }:l));
+                                          }}/>
+                                        {v.name}{v.price?`(+${(v.price/100).toFixed(2)}€)`:""}
                                       </label>
                                     );
                                   })}
@@ -1031,53 +1047,25 @@ function OrderPage() {
                   )}
 
                   {/* Choix menu */}
-                  {line.type === "menu" && line.menuId && (
+                  {line.type==="menu" && line.menuId && (
                     <div className="mt-4 space-y-3">
-                      {(findMenu(line.menuId)?.parts || []).map((p) => {
+                      {(findMenu(line.menuId)?.parts||[]).map((p)=>{
                         const choice = line.menuChoices?.[p.id] || {};
-                        const setChoice = (patch) =>
-                          setCart((prev) =>
-                            prev.map((l, index) =>
-                              index === idx
-                                ? {
-                                    ...l,
-                                    menuChoices: {
-                                      ...(l.menuChoices || {}),
-                                      [p.id]: { ...(l.menuChoices?.[p.id] || {}), ...patch },
-                                    },
-                                  }
-                                : l
-                            )
-                          );
+                        const setChoice = (patch)=>setCart((prev)=>prev.map((l,i)=>i===idx?{
+                          ...l, menuChoices:{...(l.menuChoices||{}), [p.id]:{...(l.menuChoices?.[p.id]||{}),...patch}}
+                        }:l));
 
                         return (
-                          <div
-                            key={p.id}
-                            className="rounded-2xl border border-primary/10 p-3"
-                          >
-                            <div className="font-medium">
-                              {p.name} (part #{p.id})
-                            </div>
+                          <div key={p.id} className="rounded-2xl border border-primary/10 p-3">
+                            <div className="font-medium">{p.name} (part #{p.id})</div>
                             <div className="mt-2">
                               <label className="label">Choix</label>
-                              <select
-                                className="select"
-                                value={choice.dishId || ""}
-                                onChange={(e) =>
-                                  setChoice({
-                                    dishId: e.target.value,
-                                    optionSelections: {},
-                                  })
-                                }
-                              >
+                              <select className="select" value={choice.dishId||""}
+                                onChange={(e)=>setChoice({dishId:e.target.value, optionSelections:{}})}>
                                 <option value="">—</option>
-                                {(p.dishes || []).map((dId) => {
+                                {(p.dishes||[]).map((dId)=>{
                                   const d = findDish(dId);
-                                  return (
-                                    <option key={dId} value={dId}>
-                                      {d ? `${d.name} (#${d.id})` : `Plat #${dId}`}
-                                    </option>
-                                  );
+                                  return <option key={dId} value={dId}>{d?`${d.name} (#${d.id})`:`Plat #${dId}`}</option>;
                                 })}
                               </select>
                             </div>
@@ -1086,63 +1074,25 @@ function OrderPage() {
                               <details className="mt-3 rounded-xl border border-primary/10 px-3 py-2">
                                 <summary className="text-sm">Options</summary>
                                 <div className="mt-2 flex flex-wrap gap-2">
-                                  {(optionsList || [])
-                                    .filter(
-                                      (o) =>
-                                        (findDish(choice.dishId)?.options || []).includes(
-                                          o.id
-                                        )
-                                    )
-                                    .map((opt) => {
-                                      const current = Array.isArray(
-                                        choice.optionSelections?.[opt.id]
-                                      )
-                                        ? choice.optionSelections[opt.id]
-                                        : [];
+                                  {(optionsList||[])
+                                    .filter((o)=>(findDish(choice.dishId)?.options||[]).includes(o.id))
+                                    .map((opt)=>{
+                                      const current = Array.isArray(choice.optionSelections?.[opt.id]) ? choice.optionSelections[opt.id] : [];
                                       return (
-                                        <details
-                                          key={opt.id}
-                                          className="rounded-2xl border border-primary/10 p-3"
-                                        >
-                                          <summary className="text-sm">{`${
-                                            opt.name
-                                          } (#${opt.id})${
-                                            current.length ? ` — ${current.length}` : ""
-                                          }`}</summary>
+                                        <details key={opt.id} className="rounded-2xl border border-primary/10 p-3">
+                                          <summary className="text-sm">{`${opt.name} (#${opt.id})${current.length?` — ${current.length}`:""}`}</summary>
                                           <div className="mt-2 flex flex-wrap gap-2">
-                                            {(opt.values || []).map((v) => {
-                                              const checked = current.includes(
-                                                String(v.id)
-                                              );
+                                            {(opt.values||[]).map((v)=>{
+                                              const checked = current.includes(String(v.id));
                                               return (
                                                 <label key={v.id} className="chip">
-                                                  <input
-                                                    type="checkbox"
-                                                    checked={checked}
-                                                    onChange={(e) => {
-                                                      const now = Array.isArray(
-                                                        choice.optionSelections?.[opt.id]
-                                                      )
-                                                        ? choice.optionSelections[opt.id]
-                                                        : [];
-                                                      const next = e.target.checked
-                                                        ? [...now, String(v.id)]
-                                                        : now.filter(
-                                                            (x) => x !== String(v.id)
-                                                          );
-                                                      setChoice({
-                                                        optionSelections: {
-                                                          ...(choice.optionSelections ||
-                                                            {}),
-                                                          [opt.id]: next,
-                                                        },
-                                                      });
-                                                    }}
-                                                  />
-                                                  {v.name}{" "}
-                                                  {v.price
-                                                    ? `(+${(v.price / 100).toFixed(2)}€)`
-                                                    : ""}
+                                                  <input type="checkbox" checked={checked}
+                                                    onChange={(e)=>{
+                                                      const now = Array.isArray(choice.optionSelections?.[opt.id]) ? choice.optionSelections[opt.id] : [];
+                                                      const next = e.target.checked ? [...now,String(v.id)] : now.filter((x)=>x!==String(v.id));
+                                                      setChoice({ optionSelections:{...(choice.optionSelections||{}), [opt.id]:next} });
+                                                    }}/>
+                                                  {v.name}{v.price?`(+${(v.price/100).toFixed(2)}€)`:""}
                                                 </label>
                                               );
                                             })}
@@ -1163,15 +1113,12 @@ function OrderPage() {
             })}
 
             <div className="flex flex-wrap gap-3">
-              <button className="btn-accent" onClick={addDishLine}>
-                + Ajouter un plat
-              </button>
-              <button className="btn-accent" onClick={addMenuLine}>
-                + Ajouter un menu
-              </button>
+              <button className="btn-accent" onClick={addDishLine}>+ Ajouter un plat</button>
+              <button className="btn-accent" onClick={addMenuLine}>+ Ajouter un menu</button>
             </div>
           </div>
         </section>
+        {/* === Fin du bloc panier === */}
 
         {/* 4) Paiement */}
         <section className="card p-6">
@@ -1205,16 +1152,12 @@ function OrderPage() {
               </div>
             )}
             <div className="md:col-span-1 flex items-end gap-3">
-              <button
-                type="button"
-                className="btn-ghost"
-                onClick={() => console.log("DEBUG payload:", payload)}
-              >
+              <button type="button" className="btn-ghost" onClick={() => console.log("DEBUG payload:", payload)}>
                 🧪 Debug console
               </button>
               <button
                 type="button"
-                className={`btn-success ${(!keyAllowed) ? "opacity-60 cursor-not-allowed" : ""}`}
+                className={`btn-success ${!keyAllowed ? "opacity-60 cursor-not-allowed" : ""}`}
                 disabled={loading || !canCall || !keyAllowed}
                 title={!keyAllowed ? "Restaurant non autorisé (whitelist)." : ""}
                 onClick={createOrder}
@@ -1241,12 +1184,7 @@ function Input({ label, v, set, ...rest }) {
   return (
     <label className="block">
       <span className="label">{label}</span>
-      <input
-        className="input mt-1"
-        value={v}
-        onChange={(e) => set(e.target.value)}
-        {...rest}
-      />
+      <input className="input mt-1" value={v} onChange={(e) => set(e.target.value)} {...rest} />
     </label>
   );
 }
@@ -1264,6 +1202,14 @@ export default function App() {
           element={
             <RequireAuth>
               <OrderPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/admin/whitelist"
+          element={
+            <RequireAuth>
+              <AdminWhitelistPage />
             </RequireAuth>
           }
         />

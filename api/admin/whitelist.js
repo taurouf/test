@@ -1,66 +1,50 @@
-// api/admin/whitelist.js
+import { getWhitelist, addToWhitelist, removeFromWhitelist } from '../_lib/whitelist';
+
+function ok(res, data) {
+  res.setHeader('Content-Type', 'application/json');
+  res.status(200).end(JSON.stringify(data));
+}
+
+function bad(res, code = 400, message = 'Bad request') {
+  res.setHeader('Content-Type', 'application/json');
+  res.status(code).end(JSON.stringify({ error: message }));
+}
+
+function requireAdmin(req) {
+  const expected = process.env.ADMIN_PASSWORD;
+  const got = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  return expected && got && got === expected;
+}
+
 export default async function handler(req, res) {
-  // 1) Contrôle session (même logique que tes autres routes auth)
-  const sso = req.cookies["_vercel_jwt"]; // ou ton cookie de session si différent
-  if (!sso) {
-    return res.status(401).json({ ok: false, error: "Unauthorized" });
-  }
+  try {
+    if (!requireAdmin(req)) return bad(res, 401, 'Unauthorized');
 
-  // 2) GET → renvoie la whitelist (depuis le cookie HttpOnly)
-  if (req.method === "GET") {
-    try {
-      const raw = req.cookies["wl"] || "[]";
-      const ids = JSON.parse(raw);
-      return res.status(200).json({ ok: true, ids: Array.isArray(ids) ? ids : [] });
-    } catch {
-      return res.status(200).json({ ok: true, ids: [] });
+    const env = (req.query.env || process.env.APP_ENV || 'staging').toString();
+    if (!['staging', 'production'].includes(env)) return bad(res, 400, 'env must be staging|production');
+
+    if (req.method === 'GET') {
+      const list = await getWhitelist(env);
+      return ok(res, { env, whitelist: list });
     }
-  }
 
-  // 3) POST → remplace la whitelist
-  if (req.method === "POST") {
-    try {
-      const { ids } = await readJson(req);
-      const norm = (Array.isArray(ids) ? ids : [])
-        .map((x) => Number(x))
-        .filter((x) => Number.isFinite(x));
-
-      // Écrit cookie HttpOnly  (7 jours)
-      res.setHeader("Set-Cookie", cookieSerialize("wl", JSON.stringify(norm), {
-        httpOnly: true,
-        secure: true,
-        sameSite: "lax",
-        path: "/",
-        maxAge: 60 * 60 * 24 * 7,
-      }));
-
-      return res.status(200).json({ ok: true, saved: norm.length });
-    } catch (e) {
-      return res.status(400).json({ ok: false, error: "Invalid payload" });
+    if (req.method === 'POST') {
+      const { id } = req.body || {};
+      if (!id) return bad(res, 422, 'id is required');
+      const list = await addToWhitelist(env, id);
+      return ok(res, { env, whitelist: list });
     }
+
+    if (req.method === 'DELETE') {
+      const { id } = req.body || {};
+      if (!id) return bad(res, 422, 'id is required');
+      const list = await removeFromWhitelist(env, id);
+      return ok(res, { env, whitelist: list });
+    }
+
+    return bad(res, 405, 'Method not allowed');
+  } catch (e) {
+    console.error(e);
+    return bad(res, 500, 'Server error');
   }
-
-  res.setHeader("Allow", "GET, POST");
-  return res.status(405).json({ ok: false, error: "Method not allowed" });
-}
-
-/* Utils */
-function cookieSerialize(name, val, opts) {
-  const enc = encodeURIComponent;
-  let str = `${name}=${enc(val)}`;
-  if (opts.maxAge) str += `; Max-Age=${opts.maxAge}`;
-  if (opts.domain) str += `; Domain=${opts.domain}`;
-  if (opts.path) str += `; Path=${opts.path}`;
-  if (opts.expires) str += `; Expires=${opts.expires.toUTCString()}`;
-  if (opts.httpOnly) str += `; HttpOnly`;
-  if (opts.secure) str += `; Secure`;
-  if (opts.sameSite) str += `; SameSite=${opts.sameSite}`;
-  return str;
-}
-
-async function readJson(req) {
-  const chunks = [];
-  for await (const ch of req) chunks.push(ch);
-  const txt = Buffer.concat(chunks).toString("utf8") || "{}";
-  return JSON.parse(txt);
 }

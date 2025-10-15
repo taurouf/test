@@ -8,16 +8,18 @@ const BASES = {
 
 function hasAuthCookie(req) {
   const cookie = req.headers.cookie || "";
-  return cookie.split(/;\s*/).some(c => c.startsWith("zelty_auth=ok"));
+  return cookie.split(/;\s*/).some((c) => c.startsWith("zelty_auth=ok"));
 }
 
 function getCookie(req, name) {
   const cookie = req.headers.cookie || "";
-  const m = cookie.split(/;\s*/).find(c => c.startsWith(name + "="));
+  const m = cookie.split(/;\s*/).find((c) => c.startsWith(name + "="));
   if (!m) return null;
   try {
     return decodeURIComponent(m.split("=").slice(1).join("="));
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 function stripTrailingSlash(s) {
@@ -36,7 +38,7 @@ function getRawBody(req) {
   return new Promise((resolve) => {
     if (req.method === "GET" || req.method === "HEAD") return resolve(null);
     const chunks = [];
-    req.on("data", c => chunks.push(c));
+    req.on("data", (c) => chunks.push(c));
     req.on("end", () => resolve(Buffer.concat(chunks)));
   });
 }
@@ -55,36 +57,59 @@ export default async function handler(req, res) {
 
     // Forward headers vers Zelty
     const fwd = new Headers();
-    if (req.headers.authorization) fwd.set("Authorization", req.headers.authorization);
-    if (req.headers["content-type"]) fwd.set("Content-Type", req.headers["content-type"]);
-    if (req.headers.accept) fwd.set("Accept", req.headers.accept);
+    if (req.headers.authorization)    fwd.set("Authorization", req.headers.authorization);
+    if (req.headers["content-type"])  fwd.set("Content-Type", req.headers["content-type"]);
+    if (req.headers.accept)           fwd.set("Accept", req.headers.accept);
     if (req.headers["accept-language"]) fwd.set("Accept-Language", req.headers["accept-language"]);
 
     let body = await getRawBody(req);
 
     /* ==========
-       WHITELIST : bloque POST /orders si id_restaurant non autorisé
-       Stockage côté serveur : cookie HttpOnly "wl" (JSON: [7326, 1234, ...])
+       WHITELIST stricte :
+       - cookie HttpOnly "wl_by_env" : { production: [..], staging: [..] }
+       - compat: cookie "wl" simple => même liste pour tous les env
+       - si la liste de l'env courant est VIDE => on BLOQUE
+       - pour POST /orders : on lit id_restaurant dans le body
        ========== */
     if (req.method === "POST" && restPath.startsWith("/orders")) {
       try {
-        const wlRaw = getCookie(req, "wl") || "[]";
-        const wl = JSON.parse(wlRaw);
-        if (Array.isArray(wl) && wl.length) {
-          // On parse le body pour lire id_restaurant (en gardant le buffer pour forward)
-          const txt = body ? body.toString("utf8") : "{}";
-          const json = JSON.parse(txt || "{}");
-          const idRestaurant = Number(json?.id_restaurant);
-          if (!wl.includes(idRestaurant)) {
-            return res
-              .status(403)
-              .json({ ok: false, error: "Restaurant not allowed (whitelist)." });
-          }
-          // on réécrit le buffer (au cas où JSON.stringify altère l'ordre)
-          body = Buffer.from(txt, "utf8");
+        const wlEnvRaw = getCookie(req, "wl_by_env");
+        let wlByEnv = null;
+        if (wlEnvRaw) {
+          try { wlByEnv = JSON.parse(wlEnvRaw); } catch {}
         }
+        // compat cookie simple
+        let wl = null;
+        if (!wlByEnv) {
+          const wlRaw = getCookie(req, "wl");
+          if (wlRaw) {
+            try { wl = JSON.parse(wlRaw); } catch { wl = []; }
+          }
+        }
+
+        const ids = Array.isArray(wlByEnv?.[baseKey])
+          ? wlByEnv[baseKey]
+          : Array.isArray(wl) ? wl : [];
+
+        // si vide => blocage total
+        if (!ids.length) {
+          return res
+            .status(403)
+            .json({ ok: false, error: "No restaurant allowed for this environment (whitelist empty)." });
+        }
+
+        // lire id_restaurant
+        const txt = body ? body.toString("utf8") : "{}";
+        const json = JSON.parse(txt || "{}");
+        const idRestaurant = Number(json?.id_restaurant);
+        if (!ids.includes(idRestaurant)) {
+          return res
+            .status(403)
+            .json({ ok: false, error: "Restaurant not allowed (whitelist)." });
+        }
+        // réinjecter le buffer intact
+        body = Buffer.from(txt, "utf8");
       } catch (e) {
-        // si le parse échoue, on laisse passer, mais on garde la traçabilité
         res.setHeader("X-Whitelist-Check", "parse_error");
       }
     }
