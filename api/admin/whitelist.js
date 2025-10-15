@@ -6,6 +6,19 @@ export const config = { runtime: "nodejs" };
 const COOKIE_NAME = "wl";
 const COOKIE_MAX_AGE = 60 * 60 * 24; // 1 jour
 
+export default async function handler(req, res) {
+  // CORS / preflight au cas où
+  if (req.method === "OPTIONS") {
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-admin-password");
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.statusCode = 204;
+    res.end();
+    return;
+  }
+  // ... reste du code
+}
+
 function setJson(res, status, obj, extra = {}) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
