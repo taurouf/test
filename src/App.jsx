@@ -45,6 +45,24 @@ function Modal({ open, onClose, title, children, kind = "info" }) {
   );
 }
 
+/* ===========================
+   Loader plein écran
+   =========================== */
+function BlockingLoader({ show, label = "Chargement…" }) {
+  if (!show) return null;
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-white/70 backdrop-blur-sm">
+      <div className="flex items-center gap-3 rounded-xl bg-white px-5 py-3 shadow-lg ring-1 ring-slate-200">
+        <svg className="h-5 w-5 animate-spin text-[#082C49]" viewBox="0 0 24 24">
+          <circle className="opacity-20" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+          <path className="opacity-90" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+        </svg>
+        <span className="text-[#082C49] font-medium">{label}</span>
+      </div>
+    </div>
+  );
+}
+
 /* =========================
    Constantes d'affichage
    ========================= */
@@ -423,6 +441,9 @@ function OrderPage() {
 
   // Validation de la clé API
   const [apiValid, setApiValid] = useState(false);
+  // Validation/chargement
+  const [validatingKey, setValidatingKey] = useState(false);
+  const [wlLoading, setWlLoading] = useState(false);
 
   // Modale globale
   const [modalOpen, setModalOpen] = useState(false);
@@ -455,6 +476,8 @@ function OrderPage() {
   /* ——— Vérification de la clé API ——— */
   useEffect(() => {
     let alive = true;
+    setValidatingKey(false);
+    setWlLoading(false);
 
     // Reset si clé vide / trop courte
     if (!canCall) {
@@ -462,11 +485,14 @@ function OrderPage() {
       setKeyAllowed(true);
       setRestaurants([]);
       setRestaurantId("");
+      setValidatingKey(false);
+      setWlLoading(false);
       return;
     }
 
     (async () => {
       try {
+        setValidatingKey(true);
         setStatus("Vérification de la clé API…");
         // ✅ On valide la clé via /restaurants (source d'autorité et on récupère l'ID resto)
         const r = await zfetch(API_BASE, "/restaurants", {
@@ -484,6 +510,7 @@ function OrderPage() {
         setKeyAllowed(false); // on attend la sélection d'un restaurant autorisé
 
         // Charger la whitelist (sans décider ici)
+        setWlLoading(true);
         try {
           const wlRes = await fetch(`/api/admin/whitelist?env=${envName}`, { cache: "no-store" });
           if (wlRes.ok) {
@@ -495,6 +522,8 @@ function OrderPage() {
           }
         } catch {
           setWhitelist([]);
+        } finally {
+          if (alive) setWlLoading(false);
         }
 
         setAllowMsg("");
@@ -507,6 +536,11 @@ function OrderPage() {
         setRestaurantId("");
         setAllowMsg("");
         setStatus("❌ Clé API invalide.");
+        setValidatingKey(false);
+        setWlLoading(false);
+      }
+      finally {
+        if (alive) setValidatingKey(false);
       }
     })();
 
@@ -563,6 +597,13 @@ function OrderPage() {
       setKeyAllowed(false);
       return;
     }
+    if (wlLoading) {
+      // On attend d'avoir la whitelist avant de décider
+      setKeyAllowed(false);
+      setAllowMsg("");
+      setStatus("Chargement des autorisations (whitelist)…");
+      return;
+    }
     const rid = Number(restaurantId);
     if (!whitelist.length) {
       setKeyAllowed(false);
@@ -595,7 +636,7 @@ function OrderPage() {
       setAllowMsg("");
       setStatus("✅ Restaurant autorisé.");
     }
-  }, [restaurantId, whitelist]);
+  }, [restaurantId, whitelist, wlLoading]);
 
   /* ——— Client: chargement par ID ——— */
   async function loadCustomer() {
@@ -1304,6 +1345,10 @@ function OrderPage() {
       >
         {modalContent}
       </Modal>
+      <BlockingLoader
+        show={validatingKey || (apiValid && wlLoading)}
+        label={validatingKey ? "Vérification de la clé API…" : "Vérification des autorisations…"}
+      />
     </div>
   );
 }
