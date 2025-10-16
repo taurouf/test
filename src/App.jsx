@@ -543,6 +543,7 @@ function OrderPage() {
           setKeyAllowed(true);
           setAllowMsg("");
           setStatus("✅ Clé API valide.");
+          setModalOpen(false);
         } else {
           // Le proxy a refusé => on affiche le message et on bloque
           setKeyAllowed(false);
@@ -657,6 +658,8 @@ function OrderPage() {
         setKeyAllowed(true);
         setAllowMsg("");
         setStatus("✅ Restaurant autorisé.");
+        // Ferme une éventuelle ancienne modale d'erreur
+        setModalOpen(false);
       } catch (e) {
         if (canceled) return;
 
@@ -678,22 +681,12 @@ function OrderPage() {
       } finally {
         if (!canceled) setValidatingRid(false);
       }
-
-      // 4) (Optionnel) Vérification locale en fallback
-      const ridNum = Number(restaurantId);
-      if (whitelist.length && !whitelist.includes(ridNum)) {
-        setKeyAllowed(false);
-        setAllowMsg(
-          "⚠️ Ce restaurant n’est pas dans la liste autorisée pour les envois de commandes de test. Contactez Grégory."
-        );
-        setStatus("⛔ Restaurant non autorisé — (fallback local).");
-      }
     })();
 
     return () => {
       canceled = true;
     };
-  }, [restaurantId, wlLoading, apiKey, envName, whitelist]);
+  }, [restaurantId, wlLoading, apiKey, envName]);
 
   /* ——— Client: chargement par ID ——— */
   async function loadCustomer() {
