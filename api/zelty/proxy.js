@@ -113,25 +113,54 @@ export default async function handler(req, res) {
       // si pas de json, renvoyer tel quel
     }
 
+    // Id éventuellement passé par la requête quand l'utilisateur a choisi un resto (clé enseigne)
+    const selRid =
+      Number(url.searchParams.get("rid")) ||
+      Number(url.searchParams.get("restaurant_id")) ||
+      0;
+
     if (upstream.ok && json) {
-      const rid = extractRestaurantId(json);
+      // Détecte si la réponse contient plusieurs restaurants (clé enseigne)
+      const arr = Array.isArray(json.restaurants) ? json.restaurants : [];
+      const multi = arr.length > 1;
+
+      // Détermine le rid à évaluer :
+      // - si le front a envoyé ?rid=... on l'utilise
+      // - sinon, si un seul restaurant est retourné, on prend celui-là
+      // - sinon (plusieurs restos et pas de sélection), on n'évalue pas la whitelist ici
+      let rid = 0;
+      if (selRid) {
+        rid = selRid;
+      } else if (!multi) {
+        rid = extractRestaurantId(json);
+      }
+
       let allowed = false;
+
       if (rid) {
         try {
           const list = await readWhitelist(env);
-          allowed = list.includes(rid);
+          allowed = list.includes(Number(rid));
         } catch {
           allowed = false;
         }
       }
+
+      // Cookies côté serveur
+      // - rid : l'id sélectionné (ou vide si non choisi)
+      // - wl_ok : 1 si autorisé, sinon 0 (reste 0 tant que l'utilisateur n'a pas choisi)
+      // - w1_by_env : rappel de l'environnement (pour l'écran admin)
       const cookies = [
-        `rid=${encodeURIComponent(String(rid || ""))}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`,
+        `rid=${encodeURIComponent(rid ? String(rid) : "")}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`,
         `wl_ok=${allowed ? "1" : "0"}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`,
         `w1_by_env=${encodeURIComponent(env)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`,
       ];
       res.setHeader("Set-Cookie", cookies);
 
-      if (!allowed) {
+      // Important :
+      // - clé RESTAURANT non autorisée : on renvoie 403 pour que le front affiche la popup
+      // - clé ENSEIGNE (multi) sans sélection : on NE bloque PAS ici (200), le front affichera le select
+      if (rid && !allowed) {
         return res.status(403).json({
           ok: false,
           error: "NOT_WHITELISTED",
