@@ -485,8 +485,8 @@ function OrderPage() {
       setKeyAllowed(true);
       setRestaurants([]);
       setRestaurantId("");
-      setValidatingKey(false);
-      setWlLoading(false);
+      setAllowMsg("");
+      setStatus("Choisis l’environnement, puis renseigne la clé API pour charger les catalogues.");
       return;
     }
 
@@ -494,40 +494,65 @@ function OrderPage() {
       try {
         setValidatingKey(true);
         setStatus("Vérification de la clé API…");
-        // ✅ On valide la clé via /restaurants (source d'autorité et on récupère l'ID resto)
+
+        // 1) Vérifie la clé via /restaurants
         const r = await zfetch(API_BASE, "/restaurants", {
           apiKey,
           baseKey: envName,
         });
         if (!alive) return;
-
         const rs = r?.restaurants || [];
         setRestaurants(rs);
-        if (rs.length === 1) setRestaurantId(String(rs[0].id));
-        else setRestaurantId("");
 
-        setApiValid(true);
-        setKeyAllowed(false); // on attend la sélection d'un restaurant autorisé
-
-        // Charger la whitelist (sans décider ici)
+        // 2) Charge la whitelist AVANT de décider
         setWlLoading(true);
+        let ids = [];
         try {
           const wlRes = await fetch(`/api/admin/whitelist?env=${envName}`, { cache: "no-store" });
           if (wlRes.ok) {
             const j = await wlRes.json();
-            const ids = Array.isArray(j.ids) ? j.ids.map(Number) : [];
-            setWhitelist(ids);
-          } else {
-            setWhitelist([]);
+            ids = Array.isArray(j.ids) ? j.ids.map(Number) : [];
           }
-        } catch {
-          setWhitelist([]);
-        } finally {
-          if (alive) setWlLoading(false);
-        }
+        } catch {}
+        if (!alive) return;
+        setWhitelist(ids);
+        setWlLoading(false);
 
-        setAllowMsg("");
-        setStatus(rs.length > 1 ? "✅ Clé API valide. Sélectionne un restaurant." : "✅ Clé API valide.");
+        // 3) Marque la clé comme "valide" (elle a bien authentifié l'API)
+        setApiValid(true);
+
+        if (rs.length === 1) {
+          // —— Clé RESTAURANT : on décide tout de suite
+          const rid = Number(rs[0].id);
+          setRestaurantId(String(rid));
+          const authorized = ids.includes(rid);
+
+          if (authorized) {
+            setKeyAllowed(true);
+            setAllowMsg("");
+            setStatus("✅ Clé API valide.");
+          } else {
+            setKeyAllowed(false);
+            setAllowMsg(
+              "⚠️ La clé est valide mais le restaurant lié n’est pas autorisé à créer des commandes de test. Contactez Grégory."
+            );
+            setStatus("⛔ Restaurant non autorisé — chargement du catalogue annulé.");
+            openModal(
+              "error",
+              "Restaurant non autorisé",
+              <div>
+                La clé renseignée est <b>valide</b> mais le restaurant lié n’est <b>pas autorisé</b> à créer des commandes de test.
+                <br />Veuillez contacter <b>Grégory</b>.
+              </div>
+            );
+          }
+        } else {
+          // —— Clé ENSEIGNE : on attend le choix du restaurant
+          setRestaurantId("");
+          setKeyAllowed(false);
+          setAllowMsg("");
+          setStatus("✅ Clé API valide. Sélectionne un restaurant.");
+        }
       } catch (err) {
         if (!alive) return;
         setApiValid(false);
@@ -536,10 +561,7 @@ function OrderPage() {
         setRestaurantId("");
         setAllowMsg("");
         setStatus("❌ Clé API invalide.");
-        setValidatingKey(false);
-        setWlLoading(false);
-      }
-      finally {
+      } finally {
         if (alive) setValidatingKey(false);
       }
     })();
