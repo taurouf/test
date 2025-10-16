@@ -523,47 +523,45 @@ function OrderPage() {
         setApiValid(true);
 
         if (rs.length === 1) {
-        // —— Clé RESTAURANT : on décide tout de suite
-        const rid = Number(rs[0].id);
-        setRestaurantId(String(rid));
-        // Synchroniser côté serveur (cookies rid/wl_ok) pour les clés mono-site
-        let serverOk = true;
-        try {
-          await zfetch(API_BASE, "/restaurants", {
-            apiKey,
-            baseKey: envName,
-            params: { rid },
-          });
-        } catch {
-          serverOk = false;
-        }
-
-        if (serverOk) {
-          // Le proxy a accepté => wl_ok=1 côté serveur, on déverrouille sans attendre
-          setKeyAllowed(true);
-          setAllowMsg("");
-          setStatus("✅ Clé API valide.");
-          setModalOpen(false);
-        } else {
-          // Le proxy a refusé => on affiche le message et on bloque
-          setKeyAllowed(false);
-          setAllowMsg(
-            "⚠️ La clé est valide mais le restaurant lié n’est pas autorisé à créer des commandes de test. Contactez Grégory."
-          );
-          setStatus("⛔ Restaurant non autorisé — chargement du catalogue annulé.");
-          openModal(
-            "error",
-            "Restaurant non autorisé",
-            <div>
-              La clé renseignée est <b>valide</b> mais le restaurant lié n’est <b>pas autorisé</b> à créer des commandes de test.
-              <br />Veuillez contacter <b>Grégory</b>.
-            </div>
-          );
-        }
-        } else {
+          // —— Clé RESTAURANT : décision côté client
+          const rid = Number(rs[0]?.id);
+          const inWl = ids.includes(rid);
+          setRestaurantId(String(rid));
+          if (inWl) {
+            setKeyAllowed(true);
+            setAllowMsg("");
+            setStatus("✅ Clé API valide.");
+            setModalOpen(false);
+            // Handshake proxy en fond (ne pas changer UI sur erreur)
+            zfetch(API_BASE, "/restaurants", {
+              apiKey,
+              baseKey: envName,
+              params: { rid },
+            }).catch(() => {});
+          } else {
+            setKeyAllowed(false);
+            setAllowMsg("⚠️ La clé est valide mais le restaurant lié n’est pas autorisé à créer des commandes de test. Contactez Grégory.");
+            openModal(
+              "error",
+              "Restaurant non autorisé",
+              <div>
+                La clé renseignée est <b>valide</b> mais le restaurant lié n’est <b>pas autorisé</b> à créer des commandes de test.
+                <br />Veuillez contacter <b>Grégory</b>.
+              </div>
+            );
+            setStatus("⛔ Restaurant non autorisé — chargement du catalogue annulé.");
+            // Handshake proxy en fond (ne pas changer UI sur erreur)
+            zfetch(API_BASE, "/restaurants", {
+              apiKey,
+              baseKey: envName,
+              params: { rid },
+            }).catch(() => {});
+          }
+        } else if (rs.length > 1) {
           // —— Clé ENSEIGNE : on attend le choix du restaurant
-          setRestaurantId("");
+          setApiValid(true);
           setKeyAllowed(false);
+          setRestaurantId("");
           setAllowMsg("");
           setStatus("✅ Clé API valide. Sélectionne un restaurant.");
         }
@@ -595,21 +593,22 @@ function OrderPage() {
         const d = await zfetch(API_BASE, "/catalog/dishes", {
           apiKey,
           baseKey: envName,
-          params: { lang: "fr", limit: 2000 },
+          params: { lang: "fr", limit: 2000, rid: restaurantId || undefined },
         });
         const m = await zfetch(API_BASE, "/catalog/menus", {
           apiKey,
           baseKey: envName,
-          params: { lang: "fr", limit: 1000 },
+          params: { lang: "fr", limit: 1000, rid: restaurantId || undefined },
         });
         const o = await zfetch(API_BASE, "/catalog/options", {
           apiKey,
           baseKey: envName,
-          params: { lang: "fr", limit: 2000 },
+          params: { lang: "fr", limit: 2000, rid: restaurantId || undefined },
         });
         const t = await zfetch(API_BASE, "/transaction-methods", {
           apiKey,
           baseKey: envName,
+          params: { rid: restaurantId || undefined },
         });
         setDishes(d?.dishes || []);
         setMenus(m?.menus || []);
@@ -620,7 +619,7 @@ function OrderPage() {
         setStatus(`❌ ${err.message}`);
       }
     })();
-  }, [apiValid, keyAllowed, apiKey, envName]);
+  }, [apiValid, keyAllowed, apiKey, envName, restaurantId]);
 
   // Règle “Agrégateur”
   useEffect(() => {
@@ -629,6 +628,9 @@ function OrderPage() {
 
   // Changement de restaurant => synchro serveur + décision depuis le proxy
   useEffect(() => {
+    // Always close previous modal and clear banner
+    setModalOpen(false);
+    setAllowMsg("");
     if (!restaurantId) {
       setKeyAllowed(false);
       return;
@@ -641,52 +643,41 @@ function OrderPage() {
       return;
     }
 
-    let canceled = false;
-    (async () => {
-      setValidatingRid(true);
-      try {
-        // 1) Synchronise côté serveur (cookies rid / wl_ok)
-        await zfetch(API_BASE, "/restaurants", {
-          apiKey,
-          baseKey: envName,
-          params: { rid: restaurantId },
-        });
-
-        if (canceled) return;
-
-        // 2) Le proxy accepte => wl_ok=1, on déverrouille immédiatement l'UI
-        setKeyAllowed(true);
-        setAllowMsg("");
-        setStatus("✅ Restaurant autorisé.");
-        // Ferme une éventuelle ancienne modale d'erreur
-        setModalOpen(false);
-      } catch (e) {
-        if (canceled) return;
-
-        // 3) Le proxy refuse => on bloque et on affiche la popup
-        setKeyAllowed(false);
-        setAllowMsg(
-          "⚠️ Ce restaurant n’est pas dans la liste autorisée pour les envois de commandes de test. Contactez Grégory."
-        );
-        setStatus("⛔ Restaurant non autorisé — validation serveur.");
-        openModal(
-          "error",
-          "Restaurant non autorisé",
-          <div>
-            Ce restaurant n'est <b>pas autorisé</b> à recevoir des commandes de test.<br />
-            Veuillez contacter <b>Grégory</b>.
-          </div>
-        );
-        return;
-      } finally {
-        if (!canceled) setValidatingRid(false);
-      }
-    })();
-
-    return () => {
-      canceled = true;
-    };
-  }, [restaurantId, wlLoading, apiKey, envName]);
+    // Client-side whitelist check
+    const okLocal = whitelist.includes(Number(restaurantId));
+    if (!okLocal) {
+      setKeyAllowed(false);
+      setStatus("⛔ Restaurant non autorisé (whitelist locale).");
+      setAllowMsg(
+        "⚠️ Ce restaurant n’est pas dans la liste autorisée pour les envois de commandes de test. Contactez Grégory."
+      );
+      openModal(
+        "error",
+        "Restaurant non autorisé",
+        <div>
+          Ce restaurant n'est <b>pas autorisé</b> à recevoir des commandes de test.<br />
+          Veuillez contacter <b>Grégory</b>.
+        </div>
+      );
+      return;
+    }
+    // If allowed locally, allow and handshake proxy in background
+    setKeyAllowed(true);
+    setStatus("✅ Restaurant autorisé.");
+    // Handshake proxy in background (do not flip UI on error)
+    setValidatingRid(true);
+    zfetch(API_BASE, "/restaurants", {
+      apiKey,
+      baseKey: envName,
+      params: { rid: restaurantId },
+    })
+      .catch(() => {
+        console.warn("Proxy handshake failed; UI stays allowed because WL local is OK");
+      })
+      .finally(() => {
+        setValidatingRid(false);
+      });
+  }, [restaurantId, wlLoading, apiKey, envName, whitelist]);
 
   /* ——— Client: chargement par ID ——— */
   async function loadCustomer() {
@@ -701,6 +692,7 @@ function OrderPage() {
         const byId = await zfetch(API_BASE, `/customers/${customerId}`, {
           apiKey,
           baseKey: envName,
+          params: { rid: restaurantId || undefined },
         });
         if (byId?.customer?.id || byId?.id) {
           setCustomerData(byId.customer || byId);
@@ -711,7 +703,7 @@ function OrderPage() {
       const list = await zfetch(API_BASE, "/customers", {
         apiKey,
         baseKey: envName,
-        params: { search: String(customerId), limit: 50 },
+        params: { search: String(customerId), limit: 50, rid: restaurantId || undefined },
       });
       const arr = list?.customers || list || [];
       const found = arr.find((c) => String(c.id) === String(customerId));
@@ -858,6 +850,7 @@ function OrderPage() {
         method: "POST",
         body: payload,
         baseKey: envName,
+        params: { rid: restaurantId || undefined },
       });
       const order = created?.order || created;
       if (!order?.id) throw new Error("Réponse inattendue : pas d'ID de commande.");
@@ -872,6 +865,7 @@ function OrderPage() {
           apiKey,
           method: "POST",
           baseKey: envName,
+          params: { rid: restaurantId || undefined },
           body: {
             transactions: [{ name: methodName, price: total }],
             close_if_paid: true,
