@@ -444,6 +444,7 @@ function OrderPage() {
   // Validation/chargement
   const [validatingKey, setValidatingKey] = useState(false);
   const [wlLoading, setWlLoading] = useState(false);
+  const [validatingRid, setValidatingRid] = useState(false);
 
   // Modale globale
   const [modalOpen, setModalOpen] = useState(false);
@@ -522,38 +523,42 @@ function OrderPage() {
         setApiValid(true);
 
         if (rs.length === 1) {
-          // —— Clé RESTAURANT : on décide tout de suite
-          const rid = Number(rs[0].id);
-          setRestaurantId(String(rid));
-          // Synchroniser côté serveur (cookies rid/wl_ok) pour les clés mono-site
-          try {
-            await zfetch(API_BASE, "/restaurants", {
-              apiKey,
-              baseKey: envName,
-              params: { rid },
-            });
-          } catch {}
-          const authorized = ids.includes(rid);
+        // —— Clé RESTAURANT : on décide tout de suite
+        const rid = Number(rs[0].id);
+        setRestaurantId(String(rid));
+        // Synchroniser côté serveur (cookies rid/wl_ok) pour les clés mono-site
+        let serverOk = true;
+        try {
+          await zfetch(API_BASE, "/restaurants", {
+            apiKey,
+            baseKey: envName,
+            params: { rid },
+          });
+        } catch {
+          serverOk = false;
+        }
 
-          if (authorized) {
-            setKeyAllowed(true);
-            setAllowMsg("");
-            setStatus("✅ Clé API valide.");
-          } else {
-            setKeyAllowed(false);
-            setAllowMsg(
-              "⚠️ La clé est valide mais le restaurant lié n’est pas autorisé à créer des commandes de test. Contactez Grégory."
-            );
-            setStatus("⛔ Restaurant non autorisé — chargement du catalogue annulé.");
-            openModal(
-              "error",
-              "Restaurant non autorisé",
-              <div>
-                La clé renseignée est <b>valide</b> mais le restaurant lié n’est <b>pas autorisé</b> à créer des commandes de test.
-                <br />Veuillez contacter <b>Grégory</b>.
-              </div>
-            );
-          }
+        if (serverOk) {
+          // Le proxy a accepté => wl_ok=1 côté serveur, on déverrouille sans attendre
+          setKeyAllowed(true);
+          setAllowMsg("");
+          setStatus("✅ Clé API valide.");
+        } else {
+          // Le proxy a refusé => on affiche le message et on bloque
+          setKeyAllowed(false);
+          setAllowMsg(
+            "⚠️ La clé est valide mais le restaurant lié n’est pas autorisé à créer des commandes de test. Contactez Grégory."
+          );
+          setStatus("⛔ Restaurant non autorisé — chargement du catalogue annulé.");
+          openModal(
+            "error",
+            "Restaurant non autorisé",
+            <div>
+              La clé renseignée est <b>valide</b> mais le restaurant lié n’est <b>pas autorisé</b> à créer des commandes de test.
+              <br />Veuillez contacter <b>Grégory</b>.
+            </div>
+          );
+        }
         } else {
           // —— Clé ENSEIGNE : on attend le choix du restaurant
           setRestaurantId("");
@@ -621,14 +626,14 @@ function OrderPage() {
     if (!isAggregator && source && !LIMITED_SOURCES.includes(source)) setSource("");
   }, [isAggregator, source]);
 
-  // Changement de restaurant => synchro serveur + re-vérifie whitelist
+  // Changement de restaurant => synchro serveur + décision depuis le proxy
   useEffect(() => {
     if (!restaurantId) {
       setKeyAllowed(false);
       return;
     }
     if (wlLoading) {
-      // On attend d'avoir la whitelist avant de décider
+      // On attend d'avoir la whitelist avant de décider (évite flash)
       setKeyAllowed(false);
       setAllowMsg("");
       setStatus("Chargement des autorisations (whitelist)…");
@@ -637,18 +642,28 @@ function OrderPage() {
 
     let canceled = false;
     (async () => {
-      // 1) Synchronise côté serveur (cookies rid / wl_ok)
+      setValidatingRid(true);
       try {
+        // 1) Synchronise côté serveur (cookies rid / wl_ok)
         await zfetch(API_BASE, "/restaurants", {
           apiKey,
           baseKey: envName,
           params: { rid: restaurantId },
         });
+
+        if (canceled) return;
+
+        // 2) Le proxy accepte => wl_ok=1, on déverrouille immédiatement l'UI
+        setKeyAllowed(true);
+        setAllowMsg("");
+        setStatus("✅ Restaurant autorisé.");
       } catch (e) {
         if (canceled) return;
+
+        // 3) Le proxy refuse => on bloque et on affiche la popup
         setKeyAllowed(false);
         setAllowMsg(
-          "⚠️ Ce restaurant n’est pas dans la liste autorisée pour les envois de commandes test. Contactez Grégory."
+          "⚠️ Ce restaurant n’est pas dans la liste autorisée pour les envois de commandes de test. Contactez Grégory."
         );
         setStatus("⛔ Restaurant non autorisé — validation serveur.");
         openModal(
@@ -659,51 +674,26 @@ function OrderPage() {
             Veuillez contacter <b>Grégory</b>.
           </div>
         );
-        return; // stop ici, inutile de poursuivre la vérif locale
+        return;
+      } finally {
+        if (!canceled) setValidatingRid(false);
       }
 
-      if (canceled) return;
-      // 2) Vérification locale (fallback / affichage)
-      const rid = Number(restaurantId);
-      if (!whitelist.length) {
+      // 4) (Optionnel) Vérification locale en fallback
+      const ridNum = Number(restaurantId);
+      if (whitelist.length && !whitelist.includes(ridNum)) {
         setKeyAllowed(false);
-        setAllowMsg("⚠️ Aucun restaurant autorisé pour cet environnement. Contactez Grégory.");
-        setStatus("⛔ Restaurant non autorisé (whitelist vide).");
-        openModal(
-          "error",
-          "Restaurant non autorisé",
-          <div>
-            Ce restaurant n'est <b>pas autorisé</b> à recevoir des commandes de test.<br />
-            Veuillez contacter <b>Grégory</b>.
-          </div>
-        );
-        return;
-      }
-      const ok = whitelist.includes(rid);
-      setKeyAllowed(ok);
-      if (!ok) {
         setAllowMsg(
-          "⚠️ Ce restaurant n’est pas dans la liste autorisée pour les envois de commandes test. Contactez Grégory."
+          "⚠️ Ce restaurant n’est pas dans la liste autorisée pour les envois de commandes de test. Contactez Grégory."
         );
-        setStatus("⛔ Restaurant non autorisé — chargement du catalogue annulé.");
-        openModal(
-          "error",
-          "Restaurant non autorisé",
-          <div>
-            Ce restaurant n'est <b>pas autorisé</b> à recevoir des commandes de test.<br />
-            Veuillez contacter <b>Grégory</b>.
-          </div>
-        );
-      } else {
-        setAllowMsg("");
-        setStatus("✅ Restaurant autorisé.");
+        setStatus("⛔ Restaurant non autorisé — (fallback local).");
       }
     })();
 
     return () => {
       canceled = true;
     };
-  }, [restaurantId, whitelist, wlLoading, apiKey, envName]);
+  }, [restaurantId, wlLoading, apiKey, envName, whitelist]);
 
   /* ——— Client: chargement par ID ——— */
   async function loadCustomer() {
@@ -1413,8 +1403,14 @@ function OrderPage() {
         {modalContent}
       </Modal>
       <BlockingLoader
-        show={validatingKey || (apiValid && wlLoading)}
-        label={validatingKey ? "Vérification de la clé API…" : "Vérification des autorisations…"}
+        show={validatingKey || validatingRid || (apiValid && wlLoading)}
+        label={
+          validatingKey
+            ? "Vérification de la clé API…"
+            : validatingRid
+            ? "Validation du restaurant…"
+            : "Vérification des autorisations…"
+        }
       />
     </div>
   );
