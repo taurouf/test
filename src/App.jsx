@@ -74,7 +74,7 @@ const API_BASE = "/api/zelty";
 
 const MODE_OPTIONS = [
   { value: "eat_in", label: "Sur place" },
-  { value: "take_away", label: "À emporter" },
+  { value: "takeaway", label: "À emporter" },
   { value: "delivery", label: "Livraison" },
 ];
 
@@ -93,6 +93,19 @@ const AGG_SOURCES = [
   "order-it",
 ];
 const LIMITED_SOURCES = ["web", "mobile", "kiosk"];
+
+const DUMMY_ADDRESS = {
+  name: "Client Test",
+  street: "Rue de la Paix",
+  street_num: "10",
+  zip_code: "75002",
+  city: "Paris",
+  address_more: "Interphone 42",
+  floor: "2",
+  door: "B",
+  building: "A",
+  code: "4242",
+};
 
 /* =========================
    Utils (fetch proxy)
@@ -144,6 +157,28 @@ async function zfetch(
     throw new Error(`${res.status} ${res.statusText}: ${txt}`);
   }
   return res.json();
+}
+
+/* Helper: détecte l'erreur "errno:71 / Invalid source" (clé non-agrégateur) */
+function isAggregatorSourceError(err) {
+  const msg = String(err?.message || "");
+  // signaux rapides
+  const hasInvalid = msg.includes("Invalid source");
+  const hasErrno71 = msg.includes('"errno": 71') || msg.includes('"errno":71') || msg.includes("errno\": 71");
+  if (hasInvalid && hasErrno71) return true;
+  // tentative d'extraire un JSON du message
+  try {
+    const idx = msg.indexOf("{");
+    if (idx >= 0) {
+      const raw = msg.slice(idx);
+      const obj = JSON.parse(raw);
+      const out = obj?.output || obj?.context?.output || obj;
+      const errno = Number(out?.errno ?? obj?.errno);
+      const src = out?.errors?.source || obj?.errors?.source;
+      if (errno === 71 && src === "Invalid source") return true;
+    }
+  } catch {}
+  return false;
 }
 
 /* =================================================================
@@ -648,7 +683,7 @@ function QuickTestPage() {
       };
 
       if (mode === "delivery") {
-        payload.address = { ...address };
+        payload.address = { ...DUMMY_ADDRESS };
         payload.fulfillment_type = "deliver_by_restaurant";
       }
 
@@ -691,8 +726,29 @@ function QuickTestPage() {
       );
       setStatus(`✅ Commande #${order.id} créée${paid ? " et payée" : ""}.`);
     } catch (e) {
-      openModal("error", "Erreur", <pre className="whitespace-pre-wrap text-sm">{String(e.message)}</pre>);
-      setStatus(`❌ ${e.message}`);
+      if (isAggregatorSourceError(e)) {
+        openModal(
+          "error",
+          "Clé API non agrégateur",
+          <div>
+            La clé API renseignée <b>n’est pas une clé agrégateur</b>. Pour utiliser les sources agrégateurs
+            (Uber Eats, Deliveroo, Just Eat, …), créez une clé API dédiée depuis la fiche Marketplace&nbsp;
+            <a
+              className="text-accent underline"
+              href="https://bo.zelty.fr/marketplace/belorder/status"
+              target="_blank"
+              rel="noreferrer"
+            >
+              BelOrder
+            </a>
+            , puis réessayez.
+          </div>
+        );
+        setStatus("⛔ Clé API non agrégateur.");
+      } else {
+        openModal("error", "Erreur", <pre className="whitespace-pre-wrap text-sm">{String(e.message)}</pre>);
+        setStatus(`❌ ${e.message}`);
+      }
     }
   }
 
@@ -821,14 +877,9 @@ function QuickTestPage() {
             </div>
 
             {mode === "delivery" && (
-              <div className="grid gap-4 md:grid-cols-3 mt-6">
-                <Input label="Nom adresse" v={address.name} set={(v)=>setAddress(a=>({...a,name:v}))} />
-                <Input label="N° rue" v={address.street_num} set={(v)=>setAddress(a=>({...a,street_num:v}))} />
-                <Input label="Rue" v={address.street} set={(v)=>setAddress(a=>({...a,street:v}))} />
-                <Input label="Complément" v={address.address_more} set={(v)=>setAddress(a=>({...a,address_more:v}))} />
-                <Input label="Code postal" v={address.zip_code} set={(v)=>setAddress(a=>({...a,zip_code:v}))} />
-                <Input label="Ville" v={address.city} set={(v)=>setAddress(a=>({...a,city:v}))} />
-              </div>
+              <p className="muted mt-6">
+                Adresse de test utilisée automatiquement : 10 Rue de la Paix, 75002 Paris.
+              </p>
             )}
           </section>
         )}
@@ -1315,7 +1366,7 @@ function OrderPage() {
     }
 
     if (mode === "delivery") {
-      p.address = { ...address };
+      p.address = { ...DUMMY_ADDRESS };
       p.fulfillment_type = "deliver_by_restaurant";
     }
 
@@ -1385,8 +1436,28 @@ function OrderPage() {
       );
       setCart([emptyDishLine()]);
     } catch (err) {
-      setStatus(`❌ ${err.message}`);
-      openModal("error", "Erreur", <pre className="whitespace-pre-wrap text-sm">{String(err.message)}</pre>);
+      if (isAggregatorSourceError(err)) {
+        openModal(
+          "error",
+          "Clé API non agrégateur",
+          <div>
+            La clé API renseignée <b>n’est pas une clé agrégateur</b>. Pour créer des commandes avec une source
+            agrégateur, utilisez une clé issue de la fiche Marketplace&nbsp;
+            <a
+              className="text-accent underline"
+              href="https://bo.zelty.fr/marketplace/belorder/status"
+              target="_blank"
+              rel="noreferrer"
+            >
+              BelOrder
+            </a>.
+          </div>
+        );
+        setStatus("⛔ Clé API non agrégateur.");
+      } else {
+        setStatus(`❌ ${err.message}`);
+        openModal("error", "Erreur", <pre className="whitespace-pre-wrap text-sm">{String(err.message)}</pre>);
+      }
     } finally {
       setLoading(false);
     }
@@ -1644,18 +1715,10 @@ function OrderPage() {
         {apiValid && keyAllowed && mode === "delivery" && (
           <section className="card p-6">
             <h2 className="section-title">Adresse de livraison</h2>
-            <div className="grid gap-4 md:grid-cols-3">
-              <Input label="Nom adresse" v={address.name} set={(v) => setAddress((a) => ({ ...a, name: v }))} />
-              <Input label="N° rue" v={address.street_num} set={(v) => setAddress((a) => ({ ...a, street_num: v }))} />
-              <Input label="Rue" v={address.street} set={(v) => setAddress((a) => ({ ...a, street: v }))} />
-              <Input label="Complément" v={address.address_more} set={(v) => setAddress((a) => ({ ...a, address_more: v }))} />
-              <Input label="Code postal" v={address.zip_code} set={(v) => setAddress((a) => ({ ...a, zip_code: v }))} />
-              <Input label="Ville" v={address.city} set={(v) => setAddress((a) => ({ ...a, city: v }))} />
-              <Input label="Étage" v={address.floor} set={(v) => setAddress((a) => ({ ...a, floor: v }))} />
-              <Input label="Porte" v={address.door} set={(v) => setAddress((a) => ({ ...a, door: v }))} />
-              <Input label="Bâtiment" v={address.building} set={(v) => setAddress((a) => ({ ...a, building: v }))} />
-              <Input label="Code immeuble" v={address.code} set={(v) => setAddress((a) => ({ ...a, code: v }))} />
-            </div>
+            <p className="muted">
+              Une adresse fictive est automatiquement utilisée pour ce test :
+              <br />10 Rue de la Paix, 75002 Paris (Interphone 42, Bât. A, 2ᵉ étage).
+            </p>
           </section>
         )}
 
