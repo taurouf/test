@@ -1,6 +1,8 @@
 {
   "rewrites": [
     { "source": "/api/zelty/(.*)", "destination": "/api/zelty/proxy.js" },
-     { "source": "/admin/(.*)", "destination": "/" }
+     { "source": "/admin/(.*)", "destination": "/" },
+      { "source": "/api/:match*", "destination": "/api/:match*" },
+    { "source": "/(.*)", "destination": "/index.html" }
   ]
 }
