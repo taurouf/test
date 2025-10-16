@@ -525,6 +525,14 @@ function OrderPage() {
           // —— Clé RESTAURANT : on décide tout de suite
           const rid = Number(rs[0].id);
           setRestaurantId(String(rid));
+          // Synchroniser côté serveur (cookies rid/wl_ok) pour les clés mono-site
+          try {
+            await zfetch(API_BASE, "/restaurants", {
+              apiKey,
+              baseKey: envName,
+              params: { rid },
+            });
+          } catch {}
           const authorized = ids.includes(rid);
 
           if (authorized) {
@@ -613,7 +621,7 @@ function OrderPage() {
     if (!isAggregator && source && !LIMITED_SOURCES.includes(source)) setSource("");
   }, [isAggregator, source]);
 
-  // Changement de restaurant => revérifie whitelist
+  // Changement de restaurant => synchro serveur + re-vérifie whitelist
   useEffect(() => {
     if (!restaurantId) {
       setKeyAllowed(false);
@@ -626,39 +634,76 @@ function OrderPage() {
       setStatus("Chargement des autorisations (whitelist)…");
       return;
     }
-    const rid = Number(restaurantId);
-    if (!whitelist.length) {
-      setKeyAllowed(false);
-      setAllowMsg("⚠️ Aucun restaurant autorisé pour cet environnement. Contactez Grégory.");
-      setStatus("⛔ Restaurant non autorisé (whitelist vide).");
-      openModal(
-        "error",
-        "Restaurant non autorisé",
-        <div>
-          Ce restaurant n'est <b>pas autorisé</b> à recevoir des commandes de test.<br />
-          Veuillez contacter <b>Grégory</b>.
-        </div>
-      );
-      return;
-    }
-    const ok = whitelist.includes(rid);
-    setKeyAllowed(ok);
-    if (!ok) {
-      setAllowMsg("⚠️ Ce restaurant n’est pas dans la liste autorisée pour les envois de commandes test. Contactez Grégory.");
-      setStatus("⛔ Restaurant non autorisé — chargement du catalogue annulé.");
-      openModal(
-        "error",
-        "Restaurant non autorisé",
-        <div>
-          Ce restaurant n'est <b>pas autorisé</b> à recevoir des commandes de test.<br />
-          Veuillez contacter <b>Grégory</b>.
-        </div>
-      );
-    } else {
-      setAllowMsg("");
-      setStatus("✅ Restaurant autorisé.");
-    }
-  }, [restaurantId, whitelist, wlLoading]);
+
+    let canceled = false;
+    (async () => {
+      // 1) Synchronise côté serveur (cookies rid / wl_ok)
+      try {
+        await zfetch(API_BASE, "/restaurants", {
+          apiKey,
+          baseKey: envName,
+          params: { rid: restaurantId },
+        });
+      } catch (e) {
+        if (canceled) return;
+        setKeyAllowed(false);
+        setAllowMsg(
+          "⚠️ Ce restaurant n’est pas dans la liste autorisée pour les envois de commandes test. Contactez Grégory."
+        );
+        setStatus("⛔ Restaurant non autorisé — validation serveur.");
+        openModal(
+          "error",
+          "Restaurant non autorisé",
+          <div>
+            Ce restaurant n'est <b>pas autorisé</b> à recevoir des commandes de test.<br />
+            Veuillez contacter <b>Grégory</b>.
+          </div>
+        );
+        return; // stop ici, inutile de poursuivre la vérif locale
+      }
+
+      if (canceled) return;
+      // 2) Vérification locale (fallback / affichage)
+      const rid = Number(restaurantId);
+      if (!whitelist.length) {
+        setKeyAllowed(false);
+        setAllowMsg("⚠️ Aucun restaurant autorisé pour cet environnement. Contactez Grégory.");
+        setStatus("⛔ Restaurant non autorisé (whitelist vide).");
+        openModal(
+          "error",
+          "Restaurant non autorisé",
+          <div>
+            Ce restaurant n'est <b>pas autorisé</b> à recevoir des commandes de test.<br />
+            Veuillez contacter <b>Grégory</b>.
+          </div>
+        );
+        return;
+      }
+      const ok = whitelist.includes(rid);
+      setKeyAllowed(ok);
+      if (!ok) {
+        setAllowMsg(
+          "⚠️ Ce restaurant n’est pas dans la liste autorisée pour les envois de commandes test. Contactez Grégory."
+        );
+        setStatus("⛔ Restaurant non autorisé — chargement du catalogue annulé.");
+        openModal(
+          "error",
+          "Restaurant non autorisé",
+          <div>
+            Ce restaurant n'est <b>pas autorisé</b> à recevoir des commandes de test.<br />
+            Veuillez contacter <b>Grégory</b>.
+          </div>
+        );
+      } else {
+        setAllowMsg("");
+        setStatus("✅ Restaurant autorisé.");
+      }
+    })();
+
+    return () => {
+      canceled = true;
+    };
+  }, [restaurantId, whitelist, wlLoading, apiKey, envName]);
 
   /* ——— Client: chargement par ID ——— */
   async function loadCustomer() {
