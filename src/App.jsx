@@ -684,7 +684,7 @@ function QuickTestPage() {
 
       if (mode === "delivery") {
         payload.address = { ...DUMMY_ADDRESS };
-        payload.fulfillment_type = "deliver_by_restaurant";
+        payload.fulfillment_type = "deliver_by_partner";
       }
 
       setStatus(`Création d'une commande test (${sourceKey})…`);
