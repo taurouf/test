@@ -363,7 +363,7 @@ function AdminWhitelistPage() {
             </p>
           </div>
           <div className="flex gap-3">
-            <Link className="btn-ghost bg-white/10 hover:bg-white/20" to="/">
+            <Link className="btn-ghost bg-white/10 hover:bg-white/20" to="/quick">
               ← Retour
             </Link>
           </div>
@@ -766,7 +766,7 @@ function QuickTestPage() {
             </p>
           </div>
           <div className="flex gap-3">
-            <Link className="btn-ghost bg-white/10 hover:bg-white/20" to="/">
+            <Link className="btn-ghost bg-white/10 hover:bg-white/20" to="/advanced">
               Mode avancé
             </Link>
             <Link className="btn-ghost bg-white/10 hover:bg-white/20" to="/admin/whitelist">
@@ -1989,7 +1989,7 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route
-          path="/"
+          path="/advanced"
           element={
             <RequireAuth>
               <OrderPage />
@@ -2012,7 +2012,8 @@ export default function App() {
             </RequireAuth>
           }
         />
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="/" element={<Navigate to="/quick" replace />} />
+        <Route path="*" element={<Navigate to="/quick" replace />} />
       </Routes>
     </BrowserRouter>
   );
