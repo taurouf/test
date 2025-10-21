@@ -12,12 +12,9 @@ export const MODE_OPTIONS = [
 ];
 
 export const AGG_SOURCES = [
-  "pos",
-  "remote",
   "web",
   "mobile",
   "kiosk",
-  "bo",
   "justeat",
   "foodora",
   "ubereats",

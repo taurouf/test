@@ -240,16 +240,37 @@ function QuickTestPage() {
   }, [apiValid, keyAllowed, apiKey, envName, restaurantId]);
 
   const CARDS = [
-    { key: "ubereats", label: "Uber Eats", emoji: "🚗", desc: "Commande via agrégateur Uber Eats" },
-    { key: "deliveroo", label: "Deliveroo", emoji: "🦘", desc: "Commande via agrégateur Deliveroo" },
-    { key: "justeat", label: "Just Eat", emoji: "🍽️", desc: "Commande via agrégateur Just Eat" },
-    { key: "glovo", label: "Glovo", emoji: "📦", desc: "Commande via agrégateur Glovo" },
+    {
+      key: "ubereats",
+      label: "Uber Eats",
+      emoji: "🚗",
+      image: "https://upload.wikimedia.org/wikipedia/commons/e/e7/Uber_Eats_logo_2016.svg",
+      desc: "Commande via agrégateur Uber Eats",
+    },
+    {
+      key: "deliveroo",
+      label: "Deliveroo",
+      emoji: "🦘",
+      image: "https://upload.wikimedia.org/wikipedia/commons/8/8a/Deliveroo_logo_%282016%29.svg",
+      desc: "Commande via agrégateur Deliveroo",
+    },
+    {
+      key: "justeat",
+      label: "Just Eat",
+      emoji: "🍽️",
+      image: "https://upload.wikimedia.org/wikipedia/commons/5/5d/Just_Eat_Takeaway.com_logo.svg",
+      desc: "Commande via agrégateur Just Eat",
+    },
+    {
+      key: "glovo",
+      label: "Glovo",
+      emoji: "📦",
+      image: "https://upload.wikimedia.org/wikipedia/commons/4/49/Glovo_logo.svg",
+      desc: "Commande via agrégateur Glovo",
+    },
     { key: "web", label: "Commande Web", emoji: "🌐", desc: "Commande placée sur le site web" },
     { key: "mobile", label: "Mobile", emoji: "📱", desc: "Commande mobile" },
     { key: "kiosk", label: "Kiosk", emoji: "🖥️", desc: "Commande borne" },
-    { key: "pos", label: "POS", emoji: "🧾", desc: "Point de vente interne" },
-    { key: "remote", label: "Remote", emoji: "☁️", desc: "Commande distante" },
-    { key: "bo", label: "Back Office", emoji: "🏢", desc: "Commande back-office" },
   ];
 
   async function createQuickOrder(sourceKey) {
@@ -482,7 +503,16 @@ function QuickTestPage() {
                 >
                   <div className="flex items-start gap-4">
                     <div className="h-12 w-12 grid place-items-center rounded-xl bg-accent/10 text-2xl">
-                      <span>{c.emoji}</span>
+                      {c.image ? (
+                        <img
+                          src={c.image}
+                          alt={c.label}
+                          className="h-8 w-8 object-contain"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <span>{c.emoji}</span>
+                      )}
                     </div>
                     <div className="grow">
                       <div className="font-semibold text-primary">{c.label}</div>
