@@ -155,6 +155,13 @@ function QuickTestPage() {
         setRestaurantId("");
         setAllowMsg("");
         setStatus("❌ Clé API invalide.");
+        openModal(
+          "error",
+          "Clé API invalide",
+          <div>
+            La clé API renseignée est invalide ou n’a pas pu être vérifiée. Vérifie la valeur puis réessaie.
+          </div>
+        );
       } finally {
         if (alive) setValidatingKey(false);
       }
