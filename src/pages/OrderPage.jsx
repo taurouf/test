@@ -12,6 +12,7 @@ import {
 } from "../utils/constants.js";
 import { zfetch } from "../utils/api.js";
 import { isAggregatorSourceError } from "../utils/errors.js";
+import { extractPriceCents } from "../utils/pricing.js";
 
 function OrderPage() {
   const [envName, setEnvName] = useState("production");
@@ -353,53 +354,75 @@ function OrderPage() {
       : undefined;
 
     const items = [];
+    let totalCents = 0;
 
     for (const line of cart) {
       if (line.type === "dish" && line.dishId) {
+        const quantity = Math.max(1, Number(line.quantity || 1));
+        const dishMeta = findDish(line.dishId);
+        const basePrice = extractPriceCents(
+          dishMeta?.price ?? dishMeta?.price_inc_tax ?? dishMeta?.default_price ?? dishMeta
+        );
+        totalCents += quantity * basePrice;
+
         const entry = {
           type: "dish",
           id: Number(line.dishId),
-          quantity: Math.max(1, Number(line.quantity || 1)),
+          quantity,
         };
         const modifiers = [];
+        let modifiersSum = 0;
         for (const [optId, valueIdsRaw] of Object.entries(line.optionSelections || {})) {
           const opt = findOption(optId);
           const valueIds = Array.isArray(valueIdsRaw) ? valueIdsRaw : [valueIdsRaw];
           valueIds.forEach((vId) => {
             const val = findOptionValue(opt, vId);
+            const price = Number(val?.price ?? 0);
             modifiers.push({
               option_id: Number(optId),
               option_value_id: Number(vId),
               quantity: 1,
-              price: val?.price ?? 0,
+              price,
             });
+            modifiersSum += price;
           });
         }
         if (modifiers.length) entry.modifiers = modifiers;
+        if (modifiersSum) totalCents += quantity * modifiersSum;
         items.push(entry);
       }
 
       if (line.type === "menu" && line.menuId) {
+        const quantity = Math.max(1, Number(line.quantity || 1));
+        const menuMeta = findMenu(line.menuId);
+        const basePrice = extractPriceCents(
+          menuMeta?.price ?? menuMeta?.price_inc_tax ?? menuMeta?.default_price ?? menuMeta
+        );
+        totalCents += quantity * basePrice;
+
         const entry = {
           type: "menu",
           id: Number(line.menuId),
-          quantity: Math.max(1, Number(line.quantity || 1)),
+          quantity,
           dishes: [],
         };
         for (const [partId, choice] of Object.entries(line.menuChoices || {})) {
           if (!choice?.dishId) continue;
           const partModifiers = [];
+          let partModifiersSum = 0;
           for (const [optId, valIdsRaw] of Object.entries(choice.optionSelections || {})) {
             const opt = findOption(optId);
             const valIds = Array.isArray(valIdsRaw) ? valIdsRaw : [valIdsRaw];
             valIds.forEach((vId) => {
               const val = findOptionValue(opt, vId);
+              const price = Number(val?.price ?? 0);
               partModifiers.push({
                 quantity: 1,
                 option_value_id: Number(vId),
-                price: val?.price ?? 0,
+                price,
                 option_id: Number(optId),
               });
+              partModifiersSum += price;
             });
           }
           entry.dishes.push({
@@ -408,6 +431,7 @@ function OrderPage() {
             id: Number(choice.dishId),
             ...(partModifiers.length ? { modifiers: partModifiers } : {}),
           });
+          if (partModifiersSum) totalCents += quantity * partModifiersSum;
         }
         items.push(entry);
       }
@@ -420,6 +444,22 @@ function OrderPage() {
       source: sourceValue,
       items,
     };
+
+    if (totalCents > 0) {
+      p.total = totalCents;
+    }
+
+    if (paid && paymentMethodId && totalCents > 0) {
+      const method = txnMethods.find((m) => String(m.id) === String(paymentMethodId));
+      const methodId = Number(method?.id ?? paymentMethodId);
+      p.transactions = [
+        {
+          price: totalCents,
+          ...(Number.isFinite(methodId) ? { id_transaction_method: methodId } : {}),
+          ...(method?.name ? { name: method.name } : {}),
+        },
+      ];
+    }
 
     if (addCustomer && customerId) {
       p.customer = { id: Number(customerId) };
@@ -440,7 +480,9 @@ function OrderPage() {
     cart,
     addCustomer,
     customerId,
-    address,
+    paid,
+    paymentMethodId,
+    txnMethods,
     optionsList,
   ]);
 
@@ -452,6 +494,14 @@ function OrderPage() {
         throw new Error(
           "Restaurant non autorisé (whitelist). Contactez Grégory."
         );
+      if (paid) {
+        if (!paymentMethodId) throw new Error("Sélectionne une méthode de paiement.");
+        if (!payload.transactions?.length || !payload.transactions[0]?.price) {
+          throw new Error(
+            "Impossible de calculer automatiquement le paiement. Vérifie le panier ou décoche le paiement."
+          );
+        }
+      }
 
       setLoading(true);
       setStatus("Création de la commande…");
@@ -465,24 +515,6 @@ function OrderPage() {
       });
       const order = created?.order || created;
       if (!order?.id) throw new Error("Réponse inattendue : pas d'ID de commande.");
-
-      if (paid) {
-        if (!paymentMethodId)
-          throw new Error("Sélectionne une méthode de paiement.");
-        const total = Number(order?.price?.final_amount_inc_tax || 0);
-        const method = txnMethods.find((m) => String(m.id) === String(paymentMethodId));
-        const methodName = method?.name || "CB";
-        await zfetch(API_BASE, `/orders/${order.id}/transactions`, {
-          apiKey,
-          method: "POST",
-          baseKey: envName,
-          params: { rid: restaurantId || undefined },
-          body: {
-            transactions: [{ name: methodName, price: total }],
-            close_if_paid: true,
-          },
-        });
-      }
 
       setStatus(`✅ Commande #${order.id} créée${paid ? " et payée" : ""}.`);
       openModal(

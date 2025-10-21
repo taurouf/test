@@ -10,6 +10,7 @@ import {
 } from "../utils/constants.js";
 import { zfetch } from "../utils/api.js";
 import { isAggregatorSourceError } from "../utils/errors.js";
+import { extractPriceCents } from "../utils/pricing.js";
 
 function QuickTestPage() {
   const [envName, setEnvName] = useState("production");
@@ -296,6 +297,31 @@ function QuickTestPage() {
         payload.fulfillment_type = "deliver_by_partner";
       }
 
+      const baseDishPrice = extractPriceCents(
+        dish?.price ?? dish?.price_inc_tax ?? dish?.default_price ?? dish
+      );
+      const modifiersTotal = (payload.items[0].modifiers || []).reduce(
+        (sum, mod) => sum + Number(mod.price ?? 0),
+        0
+      );
+      const totalCents = baseDishPrice + modifiersTotal;
+
+      if (paid) {
+        if (!paymentMethodId) throw new Error("Sélectionne une méthode de paiement.");
+        if (totalCents <= 0)
+          throw new Error("Impossible de calculer le montant à payer. Vérifie le produit sélectionné.");
+        const method = txnMethods.find((m) => String(m.id) === String(paymentMethodId));
+        const methodId = Number(method?.id ?? paymentMethodId);
+        payload.total = totalCents;
+        payload.transactions = [
+          {
+            price: totalCents,
+            ...(Number.isFinite(methodId) ? { id_transaction_method: methodId } : {}),
+            name: method?.name || "CB",
+          },
+        ];
+      }
+
       setStatus(`Création d'une commande test (${sourceKey})…`);
       const created = await zfetch(API_BASE, "/orders", {
         apiKey,
@@ -307,23 +333,6 @@ function QuickTestPage() {
 
       const order = created?.order || created;
       if (!order?.id) throw new Error("Réponse inattendue : pas d'ID de commande.");
-
-      if (paid) {
-        if (!paymentMethodId) throw new Error("Sélectionne une méthode de paiement.");
-        const total = Number(order?.price?.final_amount_inc_tax || 0);
-        const method = txnMethods.find((m) => String(m.id) === String(paymentMethodId));
-        const methodName = method?.name || "CB";
-        await zfetch(API_BASE, `/orders/${order.id}/transactions`, {
-          apiKey,
-          method: "POST",
-          baseKey: envName,
-          params: { rid: restaurantId || undefined },
-          body: {
-            transactions: [{ name: methodName, price: total }],
-            close_if_paid: true,
-          },
-        });
-      }
 
       openModal(
         "success",
