@@ -386,9 +386,6 @@ function QuickTestPage() {
             <Link className="btn-ghost bg-white/10 hover:bg-white/20" to="/advanced">
               Mode avancé
             </Link>
-            <Link className="btn-ghost bg-white/10 hover:bg-white/20" to="/admin/whitelist">
-              Admin
-            </Link>
           </div>
         </div>
       </div>

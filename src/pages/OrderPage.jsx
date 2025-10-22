@@ -570,9 +570,6 @@ function OrderPage() {
             <Link className="btn-ghost bg-white/10 hover:bg-white/20" to="/quick">
               Test (simple)
             </Link>
-            <Link className="btn-ghost bg-white/10 hover:bg-white/20" to="/admin/whitelist">
-              Admin
-            </Link>
             <button className="btn-ghost bg-white/10 hover:bg-white/20" onClick={handleLogout}>
               Se déconnecter
             </button>
