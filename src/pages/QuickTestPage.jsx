@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import Modal from "../components/Modal.jsx";
 import BlockingLoader from "../components/BlockingLoader.jsx";
 import {
@@ -63,6 +63,14 @@ function QuickTestPage() {
   };
 
   const canCall = Boolean(apiKey) && apiKey.length > 8;
+  const navigate = useNavigate();
+
+  async function handleLogout() {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } catch {}
+    navigate("/login", { replace: true });
+  }
 
   useEffect(() => {
     let alive = true;
@@ -386,6 +394,9 @@ function QuickTestPage() {
             <Link className="btn-ghost bg-white/10 hover:bg-white/20" to="/advanced">
               Mode avancé
             </Link>
+            <button className="btn-ghost bg-white/10 hover:bg-white/20" onClick={handleLogout}>
+              Se déconnecter
+            </button>
           </div>
         </div>
       </div>
