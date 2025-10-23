@@ -74,8 +74,38 @@ function QuickTestPage() {
 
   useEffect(() => {
     let alive = true;
+    setWlLoading(true);
+    setWhitelist([]);
+
+    (async () => {
+      try {
+        const wlRes = await fetch(`/api/admin/whitelist?env=${envName}`, {
+          cache: "no-store",
+          credentials: "same-origin",
+        });
+        if (!alive) return;
+        if (wlRes.ok) {
+          const j = await wlRes.json();
+          const ids = Array.isArray(j.ids) ? j.ids.map(Number) : [];
+          setWhitelist(ids);
+        } else {
+          setWhitelist([]);
+        }
+      } catch {
+        if (alive) setWhitelist([]);
+      } finally {
+        if (alive) setWlLoading(false);
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [envName]);
+
+  useEffect(() => {
+    let alive = true;
     setValidatingKey(false);
-    setWlLoading(false);
 
     if (!canCall) {
       setApiValid(false);
@@ -87,25 +117,16 @@ function QuickTestPage() {
       return;
     }
 
+    if (wlLoading) {
+      setStatus("Chargement des autorisations (whitelist)…");
+      return;
+    }
+
     (async () => {
       try {
         setValidatingKey(true);
-        setStatus("Chargement des autorisations (whitelist)…");
-        setWlLoading(true);
-
-        let ids = [];
-        try {
-          const wlRes = await fetch(`/api/admin/whitelist?env=${envName}`, { cache: "no-store" });
-          if (wlRes.ok) {
-            const j = await wlRes.json();
-            ids = Array.isArray(j.ids) ? j.ids.map(Number) : [];
-          }
-        } catch {}
-        if (!alive) return;
-        setWhitelist(ids);
-        setWlLoading(false);
-
         setStatus("Vérification de la clé API…");
+
         const r = await zfetch(API_BASE, "/restaurants", {
           apiKey,
           baseKey: envName,
@@ -118,7 +139,7 @@ function QuickTestPage() {
 
         if (rs.length === 1) {
           const rid = Number(rs[0]?.id);
-          const inWl = ids.includes(rid);
+          const inWl = whitelist.includes(rid);
           setRestaurantId(String(rid));
           if (inWl) {
             setKeyAllowed(true);
@@ -180,7 +201,7 @@ function QuickTestPage() {
     return () => {
       alive = false;
     };
-  }, [apiKey, envName, canCall]);
+  }, [apiKey, envName, canCall, wlLoading, whitelist]);
 
   useEffect(() => {
     setModalOpen(false);
