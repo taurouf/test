@@ -90,17 +90,9 @@ function QuickTestPage() {
     (async () => {
       try {
         setValidatingKey(true);
-        setStatus("Vérification de la clé API…");
-
-        const r = await zfetch(API_BASE, "/restaurants", {
-          apiKey,
-          baseKey: envName,
-        });
-        if (!alive) return;
-        const rs = r?.restaurants || [];
-        setRestaurants(rs);
-
+        setStatus("Chargement des autorisations (whitelist)…");
         setWlLoading(true);
+
         let ids = [];
         try {
           const wlRes = await fetch(`/api/admin/whitelist?env=${envName}`, { cache: "no-store" });
@@ -112,6 +104,15 @@ function QuickTestPage() {
         if (!alive) return;
         setWhitelist(ids);
         setWlLoading(false);
+
+        setStatus("Vérification de la clé API…");
+        const r = await zfetch(API_BASE, "/restaurants", {
+          apiKey,
+          baseKey: envName,
+        });
+        if (!alive) return;
+        const rs = r?.restaurants || [];
+        setRestaurants(rs);
 
         setApiValid(true);
 
