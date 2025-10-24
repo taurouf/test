@@ -6,7 +6,6 @@ function AdminWhitelistPage() {
   const [idsText, setIdsText] = useState("");
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
-  const [prodUnlocked, setProdUnlocked] = useState(false);
   const navigate = useNavigate();
 
   const PROD_PASSWORD = "esdaMQYmRD9tmV7N";
@@ -36,13 +35,12 @@ function AdminWhitelistPage() {
   }
 
   async function save() {
-    if (env === "production" && !prodUnlocked) {
+    if (env === "production") {
       const value = window.prompt("Mot de passe requis pour modifier la whitelist Production :");
       if (value !== PROD_PASSWORD) {
         setStatus("❌ Mot de passe invalide pour la whitelist Production.");
         return;
       }
-      setProdUnlocked(true);
     }
 
     setLoading(true);
@@ -71,12 +69,6 @@ function AdminWhitelistPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [env]);
-
-  useEffect(() => {
-    if (env !== "production") {
-      setProdUnlocked(false);
-    }
   }, [env]);
 
   return (
