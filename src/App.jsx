@@ -5,6 +5,7 @@ import RequireAuth from "./pages/RequireAuth.jsx";
 import QuickTestPage from "./pages/QuickTestPage.jsx";
 import OrderPage from "./pages/OrderPage.jsx";
 import AdminWhitelistPage from "./pages/AdminWhitelistPage.jsx";
+import AdminWhitelistProdPage from "./pages/AdminWhitelistProdPage.jsx";
 
 export default function App() {
   return (
@@ -33,6 +34,14 @@ export default function App() {
           element={
             <RequireAuth>
               <AdminWhitelistPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/admin/whitelist/production"
+          element={
+            <RequireAuth>
+              <AdminWhitelistProdPage />
             </RequireAuth>
           }
         />
