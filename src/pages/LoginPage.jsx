@@ -67,10 +67,6 @@ function LoginPage() {
               {loading ? "Vérification..." : "Se connecter"}
             </button>
           </form>
-
-          <p className="mt-4 text-xs text-[#082C49]/50">
-            Cookie de session HttpOnly (7 jours).
-          </p>
         </div>
       </div>
     </div>
