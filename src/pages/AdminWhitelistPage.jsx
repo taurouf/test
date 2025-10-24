@@ -1,11 +1,15 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import Modal from "../components/Modal.jsx";
 
 function AdminWhitelistPage() {
   const [env, setEnv] = useState("production");
   const [idsText, setIdsText] = useState("");
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showProdPasswordModal, setShowProdPasswordModal] = useState(false);
+  const [prodPassword, setProdPassword] = useState("");
+  const [prodPasswordError, setProdPasswordError] = useState("");
   const navigate = useNavigate();
 
   const PROD_PASSWORD = "esdaMQYmRD9tmV7N";
@@ -34,18 +38,7 @@ function AdminWhitelistPage() {
     }
   }
 
-  async function save() {
-    if (env === "production") {
-      const value = window.prompt(
-        "⚠️ Attention : vous êtes sur le point de modifier la whitelist Production.\n" +
-          "Veuillez confirmer en saisissant le mot de passe :"
-      );
-      if (value !== PROD_PASSWORD) {
-        setStatus("❌ Mot de passe invalide pour la whitelist Production.");
-        return;
-      }
-    }
-
+  async function performSave() {
     setLoading(true);
     setStatus("");
     try {
@@ -67,6 +60,31 @@ function AdminWhitelistPage() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function save() {
+    if (env === "production") {
+      setProdPassword("");
+      setProdPasswordError("");
+      setShowProdPasswordModal(true);
+      return;
+    }
+    await performSave();
+  }
+
+  function closeProdModal() {
+    setShowProdPasswordModal(false);
+    setProdPassword("");
+    setProdPasswordError("");
+  }
+
+  async function confirmProdPassword() {
+    if (prodPassword !== PROD_PASSWORD) {
+      setProdPasswordError("Mot de passe invalide.");
+      return;
+    }
+    closeProdModal();
+    await performSave();
   }
 
   useEffect(() => {
@@ -138,6 +156,39 @@ function AdminWhitelistPage() {
           </div>
         </section>
       </main>
+      <Modal
+        open={showProdPasswordModal}
+        onClose={closeProdModal}
+        title="Confirmation Production"
+        kind="error"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-[#082C49]">
+            ⚠️ Attention : vous êtes sur le point d'ajouter des IDs à la whitelist <strong>Production</strong>.
+            Confirme cette action en saisissant le mot de passe.
+          </p>
+          <input
+            type="password"
+            className="input"
+            value={prodPassword}
+            onChange={(e) => {
+              setProdPassword(e.target.value);
+              setProdPasswordError("");
+            }}
+            placeholder="Mot de passe"
+            autoFocus
+          />
+          {prodPasswordError && <p className="text-sm text-red-600">{prodPasswordError}</p>}
+          <div className="flex justify-end gap-3">
+            <button className="btn-ghost" type="button" onClick={closeProdModal}>
+              Annuler
+            </button>
+            <button className="btn-success" type="button" onClick={confirmProdPassword}>
+              Confirmer
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
