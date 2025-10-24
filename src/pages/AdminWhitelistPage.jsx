@@ -11,6 +11,9 @@ function AdminWhitelistPage() {
   const [prodPassword, setProdPassword] = useState("");
   const [prodPasswordError, setProdPasswordError] = useState("");
   const navigate = useNavigate();
+  const [idsPreview, setIdsPreview] = useState([]);
+  const [idsToPersist, setIdsToPersist] = useState([]);
+  const [whitelistIds, setWhitelistIds] = useState([]);
 
   const PROD_PASSWORD = "esdaMQYmRD9tmV7N";
 
@@ -30,6 +33,7 @@ function AdminWhitelistPage() {
       const j = await r.json();
       const ids = Array.isArray(j.ids) ? j.ids : [];
       setIdsText(ids.join("\n"));
+      setWhitelistIds(ids.map((x) => Number(x)).filter((n) => Number.isFinite(n)));
       setStatus("✅ Whitelist chargée.");
     } catch (e) {
       setStatus("❌ " + e.message);
@@ -38,16 +42,46 @@ function AdminWhitelistPage() {
     }
   }
 
-  async function performSave() {
+  function parseIds(text) {
+    return text
+      .split(/[\s,;]+/)
+      .map((x) => x.trim())
+      .filter(Boolean)
+      .map((x) => Number(x))
+      .filter((n) => Number.isFinite(n));
+  }
+
+  async function save() {
+    const parsed = parseIds(idsText);
+    setIdsToPersist(parsed);
+    const added = parsed.filter((id) => !whitelistIds.includes(id));
+    if (env === "production") {
+      setIdsPreview(added.length ? added : parsed);
+    }
+    if (env === "production") {
+      setProdPassword("");
+      setProdPasswordError("");
+      setShowProdPasswordModal(true);
+      return;
+    }
+    await performSave(parsed);
+  }
+
+  function closeProdModal() {
+    setShowProdPasswordModal(false);
+    setProdPassword("");
+    setProdPasswordError("");
+    setIdsPreview([]);
+    setIdsToPersist([]);
+  }
+
+  async function performSave(idsOverride) {
     setLoading(true);
     setStatus("");
     try {
-      const ids = idsText
-        .split(/[\s,;]+/)
-        .map((x) => x.trim())
-        .filter(Boolean)
-        .map((x) => Number(x))
-        .filter((n) => Number.isFinite(n));
+      const ids = Array.isArray(idsOverride)
+        ? idsOverride
+        : parseIds(idsText);
       const r = await fetch(`/api/admin/whitelist?env=${env}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -55,27 +89,15 @@ function AdminWhitelistPage() {
       });
       if (!r.ok) throw new Error(await r.text());
       setStatus("✅ Whitelist enregistrée.");
+      setWhitelistIds(ids);
+      setIdsText(ids.map((id) => String(id)).join("\n"));
+      setIdsToPersist([]);
+      setIdsPreview([]);
     } catch (e) {
       setStatus("❌ " + e.message);
     } finally {
       setLoading(false);
     }
-  }
-
-  async function save() {
-    if (env === "production") {
-      setProdPassword("");
-      setProdPasswordError("");
-      setShowProdPasswordModal(true);
-      return;
-    }
-    await performSave();
-  }
-
-  function closeProdModal() {
-    setShowProdPasswordModal(false);
-    setProdPassword("");
-    setProdPasswordError("");
   }
 
   async function confirmProdPassword() {
@@ -84,7 +106,7 @@ function AdminWhitelistPage() {
       return;
     }
     closeProdModal();
-    await performSave();
+    await performSave(idsToPersist);
   }
 
   useEffect(() => {
@@ -164,8 +186,12 @@ function AdminWhitelistPage() {
       >
         <div className="space-y-4">
           <p className="text-sm text-[#082C49]">
-            ⚠️ Attention : vous êtes sur le point d'ajouter des IDs à la whitelist <strong>Production</strong>.
-            Confirme cette action en saisissant le mot de passe.
+            ⚠️ Attention : vous êtes sur le point d'ajouter les IDs suivants à la whitelist <strong>Production</strong> :
+            <br />
+            <span className="font-semibold text-[#0B4A6F]">
+              {idsPreview.length ? idsPreview.join(", ") : "(aucun ID détecté)"}
+            </span>
+            <br />Confirme cette action en saisissant le mot de passe.
           </p>
           <input
             type="password"
