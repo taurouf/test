@@ -36,7 +36,10 @@ function AdminWhitelistPage() {
 
   async function save() {
     if (env === "production") {
-      const value = window.prompt("Mot de passe requis pour modifier la whitelist Production :");
+      const value = window.prompt(
+        "⚠️ Attention : vous êtes sur le point de modifier la whitelist Production.\n" +
+          "Veuillez confirmer en saisissant le mot de passe :"
+      );
       if (value !== PROD_PASSWORD) {
         setStatus("❌ Mot de passe invalide pour la whitelist Production.");
         return;
