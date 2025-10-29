@@ -6,7 +6,7 @@ import { readWhitelist, envFromReq } from "../_lib/whitelist.js";
 const BASES = {
   production: "https://api.zelty.fr/2.10",
   staging: "https://api.staging.zelty.co/2.10",
-  dev: "https://pm01.dev.zelty.fr/app_api",
+  dev: "https://pm01.dev.zelty.fr/app_api/2.10",
 };
 
 function cookieGet(req, name) {
