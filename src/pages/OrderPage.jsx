@@ -624,6 +624,7 @@ function OrderPage() {
               >
                 <option value="production">Production</option>
                 <option value="staging">Staging</option>
+                <option value="dev">Dev</option>
               </select>
               <p className="muted mt-1">
                 URL cible : <code className="text-accent">{DISPLAY_BASES[envName]}</code>
