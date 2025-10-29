@@ -1,7 +1,7 @@
 export const DISPLAY_BASES = {
   production: "https://api.zelty.fr/2.10",
   staging: "https://api.staging.zelty.co/2.10",
-  dev: "https://pm01.dev.zelty.fr/app_api/",
+  dev: "https://pm01.dev.zelty.fr/app_api",
 };
 
 export const API_BASE = "/api/zelty";
