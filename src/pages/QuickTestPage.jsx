@@ -64,6 +64,10 @@ function QuickTestPage() {
 
   const canCall = Boolean(apiKey) && apiKey.length > 8;
   const navigate = useNavigate();
+  const getDishPrice = (dish) =>
+    extractPriceCents(
+      dish?.price ?? dish?.price_inc_tax ?? dish?.default_price ?? dish
+    );
 
   async function handleLogout() {
     try {
@@ -310,16 +314,24 @@ function QuickTestPage() {
       if (!restaurantId) throw new Error("Choisis un restaurant.");
       if (!keyAllowed) throw new Error("Restaurant non autorisé (whitelist).");
 
-      const dish = dishes[0];
-      if (!dish) throw new Error("Aucun produit dans le catalogue.");
+      if (!dishes.length) throw new Error("Aucun produit dans le catalogue.");
+
+      let dish = dishes[0];
+      let baseDishPrice = getDishPrice(dish);
+
+      if (paid && baseDishPrice <= 0) {
+        const fallback = dishes.find((d) => getDishPrice(d) > 0);
+        if (fallback) {
+          dish = fallback;
+          baseDishPrice = getDishPrice(fallback);
+        }
+      }
 
       const payload = {
         id_restaurant: Number(restaurantId),
         mode,
         source: sourceKey,
-        items: [
-          { type: "dish", id: Number(dish.id), quantity: 1 }
-        ],
+        items: [{ type: "dish", id: Number(dish.id), quantity: 1 }],
       };
 
       if (mode === "delivery") {
@@ -327,9 +339,6 @@ function QuickTestPage() {
         payload.fulfillment_type = "deliver_by_partner";
       }
 
-      const baseDishPrice = extractPriceCents(
-        dish?.price ?? dish?.price_inc_tax ?? dish?.default_price ?? dish
-      );
       const modifiersTotal = (payload.items[0].modifiers || []).reduce(
         (sum, mod) => sum + Number(mod.price ?? 0),
         0
