@@ -10,7 +10,7 @@ import {
 } from "../utils/constants.js";
 import { zfetch } from "../utils/api.js";
 import { isAggregatorSourceError } from "../utils/errors.js";
-import { extractPriceCents } from "../utils/pricing.js";
+import { getDishUnitPrice, toCents } from "../utils/pricing.js";
 
 function QuickTestPage() {
   const [envName, setEnvName] = useState("production");
@@ -64,10 +64,6 @@ function QuickTestPage() {
 
   const canCall = Boolean(apiKey) && apiKey.length > 8;
   const navigate = useNavigate();
-  const getDishPrice = (dish) =>
-    extractPriceCents(
-      dish?.price ?? dish?.price_inc_tax ?? dish?.default_price ?? dish
-    );
 
   async function handleLogout() {
     try {
@@ -317,14 +313,20 @@ function QuickTestPage() {
       if (!dishes.length) throw new Error("Aucun produit dans le catalogue.");
 
       let dish = dishes[0];
-      let baseDishPrice = getDishPrice(dish);
+      if (!dish) throw new Error("Aucun produit dans le catalogue.");
 
-      if (paid && baseDishPrice <= 0) {
-        const fallback = dishes.find((d) => getDishPrice(d) > 0);
-        if (fallback) {
-          dish = fallback;
-          baseDishPrice = getDishPrice(fallback);
+      let unitPrice = getDishUnitPrice(dish, mode);
+      if (unitPrice <= 0) {
+        const fallbackDish = dishes.find((d) => getDishUnitPrice(d, mode) > 0);
+        if (fallbackDish) {
+          dish = fallbackDish;
+          unitPrice = getDishUnitPrice(fallbackDish, mode);
         }
+      }
+
+      const totalCents = toCents(unitPrice);
+      if (paid && totalCents <= 0) {
+        throw new Error("Prix indisponible pour le produit choisi.");
       }
 
       const basePayload = {
@@ -339,46 +341,36 @@ function QuickTestPage() {
         basePayload.fulfillment_type = "deliver_by_partner";
       }
 
-      const modifiersTotal = (basePayload.items[0].modifiers || []).reduce(
-        (sum, mod) => sum + Number(mod.price ?? 0),
-        0
-      );
-      const totalCents = baseDishPrice + modifiersTotal;
-
-      if (paid) {
-        if (!paymentMethodId) throw new Error("Sélectionne une méthode de paiement.");
-        if (totalCents <= 0)
-          throw new Error("Impossible de calculer le montant à payer. Vérifie le produit sélectionné.");
-      }
-
       if (totalCents > 0) {
         basePayload.total = totalCents;
       }
 
-      const method = txnMethods.find((m) => String(m.id) === String(paymentMethodId));
-      const transactionMethodId = Number(method?.id ?? paymentMethodId);
-      const includePayment = paid && Number.isFinite(transactionMethodId);
-      if (paid && !includePayment) {
-        throw new Error("Méthode de paiement invalide.");
+      let includePayment = false;
+      let transactionMethodId;
+      const bodyForCreate = { ...basePayload };
+
+      if (paid) {
+        if (!paymentMethodId) throw new Error("Sélectionne une méthode de paiement.");
+        const method = txnMethods.find((m) => String(m.id) === String(paymentMethodId));
+        transactionMethodId = Number(method?.id ?? paymentMethodId);
+        if (!Number.isFinite(transactionMethodId)) {
+          throw new Error("Méthode de paiement invalide.");
+        }
+        bodyForCreate.transactions = [
+          {
+            id_transaction_method: transactionMethodId,
+            price: totalCents,
+          },
+        ];
+        bodyForCreate.close_if_paid = true;
+        includePayment = true;
       }
 
-      const bodyForCreate = includePayment
-        ? {
-            ...basePayload,
-            transactions: [
-              {
-                id_transaction_method: transactionMethodId,
-              },
-            ],
-            close_if_paid: true,
-          }
-        : { ...basePayload };
-
-      if (includePayment) {
-        setStatus(`Création d'une commande test (${sourceKey})… (paiement inclus)`);
-      } else {
-        setStatus(`Création d'une commande test (${sourceKey})…`);
-      }
+      setStatus(
+        includePayment
+          ? `Création d'une commande test (${sourceKey})… (paiement inclus)`
+          : `Création d'une commande test (${sourceKey})…`
+      );
 
       let created;
       let order;

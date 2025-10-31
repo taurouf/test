@@ -12,7 +12,7 @@ import {
 } from "../utils/constants.js";
 import { zfetch } from "../utils/api.js";
 import { isAggregatorSourceError } from "../utils/errors.js";
-import { extractPriceCents } from "../utils/pricing.js";
+import { computeCartTotal } from "../utils/pricing.js";
 
 function OrderPage() {
   const [envName, setEnvName] = useState("production");
@@ -376,16 +376,10 @@ function OrderPage() {
       : undefined;
 
     const items = [];
-    let totalCents = 0;
 
     for (const line of cart) {
       if (line.type === "dish" && line.dishId) {
         const quantity = Math.max(1, Number(line.quantity || 1));
-        const dishMeta = findDish(line.dishId);
-        const basePrice = extractPriceCents(
-          dishMeta?.price ?? dishMeta?.price_inc_tax ?? dishMeta?.default_price ?? dishMeta
-        );
-        totalCents += quantity * basePrice;
 
         const entry = {
           type: "dish",
@@ -393,7 +387,6 @@ function OrderPage() {
           quantity,
         };
         const modifiers = [];
-        let modifiersSum = 0;
         for (const [optId, valueIdsRaw] of Object.entries(line.optionSelections || {})) {
           const opt = findOption(optId);
           const valueIds = Array.isArray(valueIdsRaw) ? valueIdsRaw : [valueIdsRaw];
@@ -406,21 +399,14 @@ function OrderPage() {
               quantity: 1,
               price,
             });
-            modifiersSum += price;
           });
         }
         if (modifiers.length) entry.modifiers = modifiers;
-        if (modifiersSum) totalCents += quantity * modifiersSum;
         items.push(entry);
       }
 
       if (line.type === "menu" && line.menuId) {
         const quantity = Math.max(1, Number(line.quantity || 1));
-        const menuMeta = findMenu(line.menuId);
-        const basePrice = extractPriceCents(
-          menuMeta?.price ?? menuMeta?.price_inc_tax ?? menuMeta?.default_price ?? menuMeta
-        );
-        totalCents += quantity * basePrice;
 
         const entry = {
           type: "menu",
@@ -431,7 +417,6 @@ function OrderPage() {
         for (const [partId, choice] of Object.entries(line.menuChoices || {})) {
           if (!choice?.dishId) continue;
           const partModifiers = [];
-          let partModifiersSum = 0;
           for (const [optId, valIdsRaw] of Object.entries(choice.optionSelections || {})) {
             const opt = findOption(optId);
             const valIds = Array.isArray(valIdsRaw) ? valIdsRaw : [valIdsRaw];
@@ -444,7 +429,6 @@ function OrderPage() {
                 price,
                 option_id: Number(optId),
               });
-              partModifiersSum += price;
             });
           }
           entry.dishes.push({
@@ -453,7 +437,6 @@ function OrderPage() {
             id: Number(choice.dishId),
             ...(partModifiers.length ? { modifiers: partModifiers } : {}),
           });
-          if (partModifiersSum) totalCents += quantity * partModifiersSum;
         }
         items.push(entry);
       }
@@ -467,6 +450,7 @@ function OrderPage() {
       items,
     };
 
+    const totalCents = computeCartTotal(cart, mode, dishes, menus, optionsList);
     if (totalCents > 0) {
       p.total = totalCents;
     }
@@ -491,6 +475,8 @@ function OrderPage() {
     addCustomer,
     customerId,
     optionsList,
+    dishes,
+    menus,
   ]);
 
   async function createOrder() {
@@ -501,10 +487,10 @@ function OrderPage() {
         throw new Error(
           "Restaurant non autorisé (whitelist). Contactez Grégory."
         );
+      const cartTotalCents = computeCartTotal(cart, mode, dishes, menus, optionsList);
       if (paid) {
         if (!paymentMethodId) throw new Error("Sélectionne une méthode de paiement.");
-        const totalForPayment = Number(payload?.total ?? 0);
-        if (!Number.isFinite(totalForPayment) || totalForPayment <= 0) {
+        if (!Number.isFinite(cartTotalCents) || cartTotalCents <= 0) {
           throw new Error(
             "Impossible de calculer automatiquement le paiement. Vérifie le panier ou décoche le paiement."
           );
@@ -514,26 +500,28 @@ function OrderPage() {
       setLoading(true);
       setStatus("Création de la commande…");
 
-      const method = paid
-        ? txnMethods.find((m) => String(m.id) === String(paymentMethodId))
-        : null;
-      const transactionMethodId = Number(method?.id ?? paymentMethodId);
-      const includePayment = paid && Number.isFinite(transactionMethodId);
-      if (paid && !includePayment) {
-        throw new Error("Méthode de paiement invalide.");
+      const bodyForCreate = { ...payload };
+      if (cartTotalCents > 0) {
+        bodyForCreate.total = cartTotalCents;
       }
 
-      const bodyForCreate = includePayment
-        ? {
-            ...payload,
-            transactions: [
-              {
-                id_transaction_method: transactionMethodId,
-              },
-            ],
-            close_if_paid: true,
-          }
-        : { ...payload };
+      let includePayment = false;
+      let transactionMethodId;
+      if (paid) {
+        const method = txnMethods.find((m) => String(m.id) === String(paymentMethodId));
+        transactionMethodId = Number(method?.id ?? paymentMethodId);
+        if (!Number.isFinite(transactionMethodId)) {
+          throw new Error("Méthode de paiement invalide.");
+        }
+        bodyForCreate.transactions = [
+          {
+            id_transaction_method: transactionMethodId,
+            price: cartTotalCents,
+          },
+        ];
+        bodyForCreate.close_if_paid = true;
+        includePayment = true;
+      }
 
       let created;
       let order;
@@ -553,6 +541,9 @@ function OrderPage() {
         if (!shouldFallback) throw err;
 
         const fallbackBody = { ...payload };
+        if (cartTotalCents > 0) {
+          fallbackBody.total = cartTotalCents;
+        }
         created = await zfetch(API_BASE, "/orders", {
           apiKey,
           method: "POST",
@@ -564,7 +555,7 @@ function OrderPage() {
         if (!order?.id) throw new Error("Réponse inattendue : pas d'ID de commande.");
 
         const totalForPayment = Number(
-          order?.price?.final_amount_inc_tax ?? payload?.total ?? 0
+          order?.price?.final_amount_inc_tax ?? cartTotalCents ?? 0
         );
         if (!Number.isFinite(totalForPayment) || totalForPayment <= 0) {
           throw new Error(
