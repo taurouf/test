@@ -349,28 +349,69 @@ function QuickTestPage() {
         if (!paymentMethodId) throw new Error("Sélectionne une méthode de paiement.");
         if (totalCents <= 0)
           throw new Error("Impossible de calculer le montant à payer. Vérifie le produit sélectionné.");
-        const method = txnMethods.find((m) => String(m.id) === String(paymentMethodId));
-        const methodId = Number(method?.id ?? paymentMethodId);
         payload.total = totalCents;
+      }
+
+      const includePayment = paid && paymentMethodId;
+      if (includePayment) {
         payload.transactions = [
           {
-            price: totalCents,
-            ...(Number.isFinite(methodId) ? { id_transaction_method: methodId } : {}),
-            name: method?.name || "CB",
+            id_transaction_method: Number(paymentMethodId),
           },
         ];
+        payload.close_if_paid = true;
       }
 
       setStatus(`Création d'une commande test (${sourceKey})…`);
-      const created = await zfetch(API_BASE, "/orders", {
-        apiKey,
-        method: "POST",
-        body: payload,
-        baseKey: envName,
-        params: { rid: restaurantId || undefined },
-      });
+      const bodyForCreate = { ...payload };
+      let created;
+      let order;
+      try {
+        created = await zfetch(API_BASE, "/orders", {
+          apiKey,
+          method: "POST",
+          body: bodyForCreate,
+          baseKey: envName,
+          params: { rid: restaurantId || undefined },
+        });
+        order = created?.order || created;
+      } catch (err) {
+        const message = String(err?.message || "");
+        const shouldFallback =
+          includePayment && /transactions?/i.test(message) && /price/i.test(message);
+        if (!shouldFallback) throw err;
 
-      const order = created?.order || created;
+        const fallbackBody = { ...payload };
+        delete fallbackBody.transactions;
+        delete fallbackBody.close_if_paid;
+
+        created = await zfetch(API_BASE, "/orders", {
+          apiKey,
+          method: "POST",
+          body: fallbackBody,
+          baseKey: envName,
+          params: { rid: restaurantId || undefined },
+        });
+        order = created?.order || created;
+        if (!order?.id) throw new Error("Réponse inattendue : pas d'ID de commande.");
+
+        await zfetch(API_BASE, `/orders/${order.id}/transactions`, {
+          apiKey,
+          method: "POST",
+          baseKey: envName,
+          params: { rid: restaurantId || undefined },
+          body: {
+            transactions: [
+              {
+                id_transaction_method: Number(paymentMethodId),
+                price: Number(order?.price?.final_amount_inc_tax ?? totalCents),
+              },
+            ],
+            close_if_paid: true,
+          },
+        });
+      }
+
       if (!order?.id) throw new Error("Réponse inattendue : pas d'ID de commande.");
 
       openModal(

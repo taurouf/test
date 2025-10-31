@@ -471,18 +471,6 @@ function OrderPage() {
       p.total = totalCents;
     }
 
-    if (paid && paymentMethodId && totalCents > 0) {
-      const method = txnMethods.find((m) => String(m.id) === String(paymentMethodId));
-      const methodId = Number(method?.id ?? paymentMethodId);
-      p.transactions = [
-        {
-          price: totalCents,
-          ...(Number.isFinite(methodId) ? { id_transaction_method: methodId } : {}),
-          ...(method?.name ? { name: method.name } : {}),
-        },
-      ];
-    }
-
     if (addCustomer && customerId) {
       p.customer = { id: Number(customerId) };
     }
@@ -502,9 +490,6 @@ function OrderPage() {
     cart,
     addCustomer,
     customerId,
-    paid,
-    paymentMethodId,
-    txnMethods,
     optionsList,
   ]);
 
@@ -518,7 +503,8 @@ function OrderPage() {
         );
       if (paid) {
         if (!paymentMethodId) throw new Error("Sélectionne une méthode de paiement.");
-        if (!payload.transactions?.length || !payload.transactions[0]?.price) {
+        const totalForPayment = Number(payload?.total ?? 0);
+        if (!Number.isFinite(totalForPayment) || totalForPayment <= 0) {
           throw new Error(
             "Impossible de calculer automatiquement le paiement. Vérifie le panier ou décoche le paiement."
           );
@@ -528,14 +514,71 @@ function OrderPage() {
       setLoading(true);
       setStatus("Création de la commande…");
 
-      const created = await zfetch(API_BASE, "/orders", {
-        apiKey,
-        method: "POST",
-        body: payload,
-        baseKey: envName,
-        params: { rid: restaurantId || undefined },
-      });
-      const order = created?.order || created;
+      const includePayment = paid && paymentMethodId;
+      const bodyForCreate = { ...payload };
+      if (includePayment) {
+        bodyForCreate.transactions = [
+          {
+            id_transaction_method: Number(paymentMethodId),
+          },
+        ];
+        bodyForCreate.close_if_paid = true;
+      }
+
+      let created;
+      let order;
+      try {
+        created = await zfetch(API_BASE, "/orders", {
+          apiKey,
+          method: "POST",
+          body: bodyForCreate,
+          baseKey: envName,
+          params: { rid: restaurantId || undefined },
+        });
+        order = created?.order || created;
+      } catch (err) {
+        const message = String(err?.message || "");
+        const shouldFallback =
+          includePayment && /transactions?/i.test(message) && /price/i.test(message);
+        if (!shouldFallback) throw err;
+
+        const fallbackBody = { ...payload };
+        created = await zfetch(API_BASE, "/orders", {
+          apiKey,
+          method: "POST",
+          body: fallbackBody,
+          baseKey: envName,
+          params: { rid: restaurantId || undefined },
+        });
+        order = created?.order || created;
+        if (!order?.id) throw new Error("Réponse inattendue : pas d'ID de commande.");
+
+        const totalForPayment = Number(
+          order?.price?.final_amount_inc_tax ?? payload?.total ?? 0
+        );
+        if (!Number.isFinite(totalForPayment) || totalForPayment <= 0) {
+          throw new Error(
+            "Total de paiement indisponible après création. Commande créée sans paiement."
+          );
+        }
+
+        await zfetch(API_BASE, `/orders/${order.id}/transactions`, {
+          apiKey,
+          method: "POST",
+          baseKey: envName,
+          params: { rid: restaurantId || undefined },
+          body: {
+            transactions: [
+              {
+                id_transaction_method: Number(paymentMethodId),
+                price: totalForPayment,
+              },
+            ],
+            close_if_paid: true,
+          },
+        });
+      }
+
       if (!order?.id) throw new Error("Réponse inattendue : pas d'ID de commande.");
 
       setStatus(`✅ Commande #${order.id} créée${paid ? " et payée" : ""}.`);
