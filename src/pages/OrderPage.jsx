@@ -514,16 +514,26 @@ function OrderPage() {
       setLoading(true);
       setStatus("Création de la commande…");
 
-      const includePayment = paid && paymentMethodId;
-      const bodyForCreate = { ...payload };
-      if (includePayment) {
-        bodyForCreate.transactions = [
-          {
-            id_transaction_method: Number(paymentMethodId),
-          },
-        ];
-        bodyForCreate.close_if_paid = true;
+      const method = paid
+        ? txnMethods.find((m) => String(m.id) === String(paymentMethodId))
+        : null;
+      const transactionMethodId = Number(method?.id ?? paymentMethodId);
+      const includePayment = paid && Number.isFinite(transactionMethodId);
+      if (paid && !includePayment) {
+        throw new Error("Méthode de paiement invalide.");
       }
+
+      const bodyForCreate = includePayment
+        ? {
+            ...payload,
+            transactions: [
+              {
+                id_transaction_method: transactionMethodId,
+              },
+            ],
+            close_if_paid: true,
+          }
+        : { ...payload };
 
       let created;
       let order;
@@ -570,7 +580,7 @@ function OrderPage() {
           body: {
             transactions: [
               {
-                id_transaction_method: Number(paymentMethodId),
+                id_transaction_method: transactionMethodId,
                 price: totalForPayment,
               },
             ],

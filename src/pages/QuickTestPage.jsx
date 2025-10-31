@@ -327,7 +327,7 @@ function QuickTestPage() {
         }
       }
 
-      const payload = {
+      const basePayload = {
         id_restaurant: Number(restaurantId),
         mode,
         source: sourceKey,
@@ -335,11 +335,11 @@ function QuickTestPage() {
       };
 
       if (mode === "delivery") {
-        payload.address = { ...DUMMY_ADDRESS };
-        payload.fulfillment_type = "deliver_by_partner";
+        basePayload.address = { ...DUMMY_ADDRESS };
+        basePayload.fulfillment_type = "deliver_by_partner";
       }
 
-      const modifiersTotal = (payload.items[0].modifiers || []).reduce(
+      const modifiersTotal = (basePayload.items[0].modifiers || []).reduce(
         (sum, mod) => sum + Number(mod.price ?? 0),
         0
       );
@@ -349,21 +349,37 @@ function QuickTestPage() {
         if (!paymentMethodId) throw new Error("Sélectionne une méthode de paiement.");
         if (totalCents <= 0)
           throw new Error("Impossible de calculer le montant à payer. Vérifie le produit sélectionné.");
-        payload.total = totalCents;
       }
 
-      const includePayment = paid && paymentMethodId;
+      if (totalCents > 0) {
+        basePayload.total = totalCents;
+      }
+
+      const method = txnMethods.find((m) => String(m.id) === String(paymentMethodId));
+      const transactionMethodId = Number(method?.id ?? paymentMethodId);
+      const includePayment = paid && Number.isFinite(transactionMethodId);
+      if (paid && !includePayment) {
+        throw new Error("Méthode de paiement invalide.");
+      }
+
+      const bodyForCreate = includePayment
+        ? {
+            ...basePayload,
+            transactions: [
+              {
+                id_transaction_method: transactionMethodId,
+              },
+            ],
+            close_if_paid: true,
+          }
+        : { ...basePayload };
+
       if (includePayment) {
-        payload.transactions = [
-          {
-            id_transaction_method: Number(paymentMethodId),
-          },
-        ];
-        payload.close_if_paid = true;
+        setStatus(`Création d'une commande test (${sourceKey})… (paiement inclus)`);
+      } else {
+        setStatus(`Création d'une commande test (${sourceKey})…`);
       }
 
-      setStatus(`Création d'une commande test (${sourceKey})…`);
-      const bodyForCreate = { ...payload };
       let created;
       let order;
       try {
@@ -381,9 +397,7 @@ function QuickTestPage() {
           includePayment && /transactions?/i.test(message) && /price/i.test(message);
         if (!shouldFallback) throw err;
 
-        const fallbackBody = { ...payload };
-        delete fallbackBody.transactions;
-        delete fallbackBody.close_if_paid;
+        const fallbackBody = { ...basePayload };
 
         created = await zfetch(API_BASE, "/orders", {
           apiKey,
@@ -395,6 +409,15 @@ function QuickTestPage() {
         order = created?.order || created;
         if (!order?.id) throw new Error("Réponse inattendue : pas d'ID de commande.");
 
+        const fallbackPrice = Number(
+          order?.price?.final_amount_inc_tax ?? totalCents ?? basePayload?.total ?? 0
+        );
+        if (!Number.isFinite(fallbackPrice) || fallbackPrice <= 0) {
+          throw new Error(
+            "Paiement impossible : montant introuvable après création. Commande créée sans paiement."
+          );
+        }
+
         await zfetch(API_BASE, `/orders/${order.id}/transactions`, {
           apiKey,
           method: "POST",
@@ -403,8 +426,8 @@ function QuickTestPage() {
           body: {
             transactions: [
               {
-                id_transaction_method: Number(paymentMethodId),
-                price: Number(order?.price?.final_amount_inc_tax ?? totalCents),
+                id_transaction_method: transactionMethodId,
+                price: fallbackPrice,
               },
             ],
             close_if_paid: true,
